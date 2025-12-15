@@ -230,6 +230,9 @@ void setup() {
   
   setupLittleFS();
   setupBLE();
+  
+  delay(1000);
+  
   setupLoRa();
   
   Serial.println("\n✅ Sistema TX listo");
@@ -339,6 +342,11 @@ void setupBLE() {
   
   pService->start();
   
+  Serial.println("✅ Servicio BLE creado: " + String(SERVICE_UUID));
+  Serial.println("   - CMD_WRITE: " + String(CMD_WRITE_UUID));
+  Serial.println("   - DATA_READ: " + String(DATA_READ_UUID));
+  Serial.println("   - PROGRESS: " + String(PROGRESS_UUID));
+  
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
@@ -346,6 +354,7 @@ void setupBLE() {
   BLEDevice::startAdvertising();
   
   Serial.println("✅ BLE iniciado: " + String(DEVICE_NAME));
+  Serial.println("✅ Advertising con UUID: " + String(SERVICE_UUID));
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -358,7 +367,8 @@ void setupLoRa() {
   int state = radio.begin(915.0);
   if (state != RADIOLIB_ERR_NONE) {
     Serial.printf("❌ Error iniciando SX1262, código: %d\n", state);
-    while (true) delay(1000);
+    Serial.println("⚠️ Continuando sin LoRa...");
+    return;
   }
   
   Serial.println("✅ SX1262 inicializado");
