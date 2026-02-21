@@ -603,10 +603,7 @@ public class BLEManager {
                 }
             }
         }
-
-        /**
-         * Descriptor escrito (para habilitar notificaciones)
-         */
+        /**Descriptor escrito (para habilitar notificaciones)*/
         @Override
         public void onDescriptorWrite(BluetoothGatt gatt,
                                       BluetoothGattDescriptor descriptor,
@@ -619,19 +616,15 @@ public class BLEManager {
             }
         }
     };
-
     // ════════════════════════════════════════════════════════════════════
     // 🔔 HABILITAR NOTIFICACIONES
     // ════════════════════════════════════════════════════════════════════
-
     /**
      * Habilitar notificaciones en una característica
-     *
      * @param gatt Instancia de BluetoothGatt
      * @param characteristic Característica en la que habilitar notificaciones
      */
-    private void enableNotifications(BluetoothGatt gatt,
-                                     BluetoothGattCharacteristic characteristic) {
+    private void enableNotifications(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(context,
                     android.Manifest.permission.BLUETOOTH_CONNECT)
@@ -639,9 +632,7 @@ public class BLEManager {
                 return;
             }
         }
-
         Log.d(TAG, "🔔 Habilitando notificaciones en: " + characteristic.getUuid());
-
         // Habilitar notificaciones localmente
         boolean success = gatt.setCharacteristicNotification(characteristic, true);
 
@@ -683,16 +674,11 @@ public class BLEManager {
     // 📊 GETTERS
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * @return true si está conectado
-     */
+    /**@return true si está conectado**/
     public boolean isConnected() {
         return isConnected;
     }
-
-    /**
-     * @return true si está conectando
-     */
+    /**@return true si está conectando**/
     public boolean isConnecting() {
         return isConnecting;
     }

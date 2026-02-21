@@ -765,51 +765,34 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return;
         }
 
-        // Inicio de transmisión LoRa
-        if (data.equals("OK:TX_STARTING")) {
-            Log.d(TAG, "📡 Transmisión LoRa iniciada");
-            showLoRaProgress(true, "Transmitiendo...", 0);
+        // Inicio de transmisión LoRa BROADCAST
+        if (data.equals("OK:TX_STARTING_BROADCAST")) {  // ✅ CAMBIO
+            Log.d(TAG, "📡 Transmisión LoRa BROADCAST iniciada");
+            showLoRaProgress(true, "Transmitiendo (Broadcast)...", 0);
             return;
         }
 
-        // Status de transmisión LoRa
-        if (data.startsWith("TX_STATUS:")) {
-            String[] parts = data.substring(10).split(":");
-            if (parts.length >= 2) {
-                String progress = parts[0]; // ej: "25/100"
-                String retries = parts.length > 1 ? parts[1] : "0";
-
-                String[] progressParts = progress.split("/");
-                if (progressParts.length == 2) {
-                    int current = Integer.parseInt(progressParts[0]);
-                    int total = Integer.parseInt(progressParts[1]);
-                    int percentage = (current * 100) / total;
-
-                    updateLoRaProgress(percentage,
-                            "Fragmento " + progress + " | Reintentos: " + retries);
-                }
-            }
-            return;
-        }
-
-        // Transmisión LoRa completada
-        if (data.startsWith("TX_COMPLETE:")) {
+        // Transmisión LoRa BROADCAST completada
+        if (data.startsWith("TX_COMPLETE_BROADCAST:")) {  // ✅ CAMBIO
             isTransmitting = false;
             showLoRaProgress(false, "", 0);
 
-            String[] parts = data.substring(12).split(":");
-            if (parts.length >= 3) {
+            String[] parts = data.substring(23).split(":");  // ✅ CAMBIO: offset 23
+            if (parts.length >= 4) {  // ✅ CAMBIO: ahora son 4 partes
                 String size = parts[0];
                 String time = parts[1];
                 String speed = parts[2];
+                String rounds = parts[3];  // ✅ NUEVO: número de vueltas
 
-                String message = "✅ Transmisión completada\n\n" +
+                String message = "✅ Transmisión BROADCAST completada\n\n" +
+                        "Modo: Sin ACK (Carrusel)\n" +  // ✅ NUEVO
                         "Tamaño: " + formatFileSize(Long.parseLong(size)) + "\n" +
                         "Tiempo: " + time + " s\n" +
-                        "Velocidad: " + speed + " kbps";
+                        "Velocidad: " + speed + " kbps\n" +
+                        "Vueltas: " + rounds;  // ✅ NUEVO
 
                 new AlertDialog.Builder(this)
-                        .setTitle("📡 Transmisión Exitosa")
+                        .setTitle("📡 Transmisión BROADCAST Exitosa")
                         .setMessage(message)
                         .setPositiveButton("OK", null)
                         .show();
@@ -1002,23 +985,23 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         }
     }
     /**
-     * ════════════════════════════════════════════════════════════════
+     * ══════════════════════════════════════════════════════════════
      * ⚙️ CLASE - LoRaConfig
-     * ════════════════════════════════════════════════════════════════
+     * ══════════════════════════════════════════════════════════════
      */
     private static class LoRaConfig {
-        int bandwidth;      // 125, 250, 500
+        int bandwidth;       // 125, 250, 500
         int spreadingFactor; // 7, 9, 12
-        int codingRate;     // 5, 7, 8
-        int ackInterval;    // 3, 5, 7, 10, 15
-        int power;          // 10, 14, 17, 20
+        int codingRate;      // 5, 7, 8
+        int repeat;          // ✅ CAMBIO: 1, 2, 3, 5 (vueltas carrusel)
+        int power;           // 10, 14, 17, 20
 
         LoRaConfig() {
             // Valores por defecto
             bandwidth = 125;
             spreadingFactor = 9;
             codingRate = 7;
-            ackInterval = 5;
+            repeat = 2;  // ✅ CAMBIO: 2 vueltas por defecto
             power = 17;
         }
 
@@ -1026,7 +1009,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return "{\"bw\":" + bandwidth +
                     ",\"sf\":" + spreadingFactor +
                     ",\"cr\":" + codingRate +
-                    ",\"ack\":" + ackInterval +
+                    ",\"repeat\":" + repeat +  // ✅ CAMBIO: "repeat" en vez de "ack"
                     ",\"power\":" + power + "}";
         }
 
@@ -1051,8 +1034,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                             case "cr":
                                 codingRate = value;
                                 break;
-                            case "ack":
-                                ackInterval = value;
+                            case "repeat":  // ✅ CAMBIO: "repeat" en vez de "ack"
+                                repeat = value;
                                 break;
                             case "power":
                                 power = value;
@@ -1068,7 +1051,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         @Override
         public String toString() {
             return "BW: " + bandwidth + " kHz, SF: " + spreadingFactor +
-                    ", CR: 4/" + codingRate + ", ACK: " + ackInterval +
+                    ", CR: 4/" + codingRate + ", Vueltas: " + repeat +  // ✅ CAMBIO
                     ", Power: " + power + " dBm";
         }
     }
@@ -1150,7 +1133,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         Spinner spinnerBW = dialogView.findViewById(R.id.spinnerBW);
         Spinner spinnerSF = dialogView.findViewById(R.id.spinnerSF);
         Spinner spinnerCR = dialogView.findViewById(R.id.spinnerCR);
-        Spinner spinnerACK = dialogView.findViewById(R.id.spinnerACK);
+        Spinner spinnerRepeat = dialogView.findViewById(R.id.spinnerRepeat);  // ✅ CAMBIO
         Spinner spinnerPower = dialogView.findViewById(R.id.spinnerPower);
 
         // Configurar adaptadores
@@ -1172,11 +1155,12 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         adapterCR.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinnerCR.setAdapter(adapterCR);
 
-        ArrayAdapter<String> adapterACK = new ArrayAdapter<>(this,
+        // ✅ CAMBIO: Spinner de repeticiones en lugar de ACK
+        ArrayAdapter<String> adapterRepeat = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item,
-                new String[]{"3", "5", "7", "10", "15"});
-        adapterACK.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerACK.setAdapter(adapterACK);
+                new String[]{"1 vuelta", "2 vueltas", "3 vueltas", "5 vueltas"});
+        adapterRepeat.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerRepeat.setAdapter(adapterRepeat);
 
         ArrayAdapter<String> adapterPower = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item,
@@ -1203,12 +1187,12 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             case 8: spinnerCR.setSelection(2); break;
         }
 
-        switch (currentLoRaConfig.ackInterval) {
-            case 3: spinnerACK.setSelection(0); break;
-            case 5: spinnerACK.setSelection(1); break;
-            case 7: spinnerACK.setSelection(2); break;
-            case 10: spinnerACK.setSelection(3); break;
-            case 15: spinnerACK.setSelection(4); break;
+        // ✅ CAMBIO: Selección de repeticiones
+        switch (currentLoRaConfig.repeat) {
+            case 1: spinnerRepeat.setSelection(0); break;
+            case 2: spinnerRepeat.setSelection(1); break;
+            case 3: spinnerRepeat.setSelection(2); break;
+            case 5: spinnerRepeat.setSelection(3); break;
         }
 
         switch (currentLoRaConfig.power) {
@@ -1220,7 +1204,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         // Mostrar diálogo
         new AlertDialog.Builder(this)
-                .setTitle("⚙️ Configuración LoRa")
+                .setTitle("⚙️ Configuración LoRa BROADCAST")  // ✅ CAMBIO
                 .setView(dialogView)
                 .setPositiveButton("✅ Aplicar", (dialog, which) -> {
                     // Obtener valores seleccionados
@@ -1233,8 +1217,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                     String crText = spinnerCR.getSelectedItem().toString();
                     currentLoRaConfig.codingRate = Integer.parseInt(crText.split("/")[1]);
 
-                    currentLoRaConfig.ackInterval = Integer.parseInt(
-                            spinnerACK.getSelectedItem().toString());
+                    // ✅ CAMBIO: Parsear repeticiones
+                    String repeatText = spinnerRepeat.getSelectedItem().toString();
+                    currentLoRaConfig.repeat = Integer.parseInt(repeatText.split(" ")[0]);
 
                     String powerText = spinnerPower.getSelectedItem().toString();
                     currentLoRaConfig.power = Integer.parseInt(powerText.split(" ")[0]);
@@ -1271,6 +1256,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     // 📡 TRANSMITIR ARCHIVO POR LORA (solo TX)
     // ════════════════════════════════════════════════════════════════════
 
+    // 📡 TRANSMITIR ARCHIVO POR LORA (línea 1274)
     private void transmitFileViaLoRa(FileInfo fileInfo) {
         if (!isTxMode) {
             Toast.makeText(this, "⚠️ Solo disponible en modo TX",
@@ -1284,24 +1270,29 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return;
         }
 
-        Log.d(TAG, "📡 Preparando transmisión LoRa: " + fileInfo.name);
+        Log.d(TAG, "📡 Preparando transmisión LoRa BROADCAST: " + fileInfo.name);
 
         final FileInfo file = fileInfo;
 
         // Mostrar confirmación
         new AlertDialog.Builder(this)
-                .setTitle("📡 Transmitir por LoRa")
+                .setTitle("📡 Transmitir por LoRa BROADCAST")  // ✅ CAMBIO
                 .setMessage("¿Transmitir '" + file.name + "' por LoRa?\n\n" +
+                        "⚠️ MODO BROADCAST:\n" +  // ✅ NUEVO
+                        "- Sin confirmación del receptor\n" +
+                        "- Transmisión repetida (" + currentLoRaConfig.repeat + " vueltas)\n" +
+                        "- FEC + Interleaving activados\n\n" +
                         "Tamaño: " + formatFileSize(file.size) + "\n" +
                         "Configuración: " + currentLoRaConfig.toString() + "\n\n" +
-                        "Asegúrate de que el RX tenga la misma configuración.")
+                        "Asegúrate de que el RX esté escuchando.")
                 .setPositiveButton("📡 Transmitir", (dialog, which) -> {
                     isTransmitting = true;
-                    showLoRaProgress(true, "Iniciando transmisión...", 0);
+                    showLoRaProgress(true, "Iniciando transmisión BROADCAST...", 0);
 
                     bleManager.sendCommand("CMD:TX_FILE:" + file.name);
 
-                    Toast.makeText(this, "📡 Transmitiendo...", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "📡 Transmitiendo en BROADCAST...",
+                            Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <!-- Bandwidth -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="📶 Bandwidth"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spinnerBW"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="15dp"/>
+
+    <!-- Spreading Factor -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="📡 Spreading Factor"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spinnerSF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="15dp"/>
+
+    <!-- Coding Rate -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🔧 Coding Rate"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spinnerCR"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="15dp"/>
+
+    <!-- ✅ CAMBIO: Repeticiones en lugar de ACK Interval -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🔁 Repeticiones (Carrusel)"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spinnerRepeat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="15dp"/>
+
+    <!-- Power -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="⚡ Potencia"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spinnerPower"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="15dp"/>
+
+    <!-- ✅ NUEVO: Info Broadcast -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ℹ️ Modo BROADCAST:\nSin ACK, con FEC + Interleaving"
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:layout_marginTop="10dp"
+        android:padding="8dp"
+        android:background="#E3F2FD"/>
+
+</LinearLayout>

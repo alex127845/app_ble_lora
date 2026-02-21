@@ -71,12 +71,12 @@
                 android:padding="16dp">
 
                 <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_width="368dp"
+                    android:layout_height="266dp"
                     android:text="📡 Configuración LoRa"
+                    android:textColor="#1976D2"
                     android:textSize="18sp"
-                    android:textStyle="bold"
-                    android:textColor="#1976D2" />
+                    android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/tvLoRaStatus"
