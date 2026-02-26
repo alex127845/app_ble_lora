@@ -43,23 +43,6 @@ import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * ════════════════════════════════════════════════════════════════════════
- * 📂 DeviceActivity - Gestión de Archivos con Heltec
- * ════════════════════════════════════════════════════════════════════════
- *
- * Esta actividad permite:
- * - Conectarse al dispositivo Heltec vía BLE
- * - Listar archivos en LittleFS
- * - Subir archivos al Heltec
- * - Descargar archivos del Heltec
- * - Eliminar archivos del Heltec
- * - Ver progreso de transferencias en tiempo real
- *
- * @author alex127845
- * @date 2025-01-21
- * @version 2.0
- */
 public class DeviceActivity extends AppCompatActivity implements BLEManager.BLECallback {
 
     private static final String TAG = "DeviceActivity";
@@ -201,6 +184,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         // Ocultar progreso LoRa
         layoutLoRaTransmitting.setVisibility(View.GONE);
+
+        // ✅ NUEVO: Mostrar modo como "detectando..." hasta confirmar
+        tvLoRaStatus.setText("🔍 Detectando modo...");
 
         // Detectar modo TX/RX del nombre del dispositivo
         detectDeviceMode();
@@ -554,7 +540,11 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             // Listar archivos automáticamente
             new Handler().postDelayed(() -> {
                 listFiles();
-                // ⬇️ NUEVO - Obtener configuración LoRa
+
+                // ✅ IMPORTANTE: Enviar comando para detectar modo
+                bleManager.sendCommand("CMD:GET_MODE");
+
+                // Obtener configuración LoRa
                 bleManager.sendCommand("CMD:GET_LORA_CONFIG");
             }, 500);
         });
@@ -753,14 +743,18 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             Log.d(TAG, "⚙️ Configuración LoRa recibida: " + json);
             currentLoRaConfig.fromJson(json);
             updateLoRaStatusUI();
-            Toast.makeText(this, "✅ Config LoRa actualizada", Toast.LENGTH_SHORT).show();
+            // ✅ CAMBIO: Informar que es config persistida
+            Toast.makeText(this, "✅ Config LoRa cargada (guardada en flash)",
+                    Toast.LENGTH_SHORT).show();
             return;
         }
 
         // Confirmación de config LoRa
         if (data.equals("OK:LORA_CONFIG_SET")) {
-            Log.d(TAG, "✅ Configuración LoRa aplicada");
-            Toast.makeText(this, "✅ Configuración LoRa aplicada",
+            Log.d(TAG, "✅ Configuración LoRa aplicada y guardada");
+
+            // ✅ CAMBIO: Informar persistencia
+            Toast.makeText(this, "✅ Configuración guardada en memoria flash",
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -875,6 +869,32 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
             String reason = data.substring(10);
             Toast.makeText(this, "❌ RX fallida: " + reason, Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        // ✅ Respuesta de modo del dispositivo
+        if (data.startsWith("MODE:")) {
+            String mode = data.substring(5).trim();
+
+            if (mode.equals("TX")) {
+                isTxMode = true;
+                Log.d(TAG, "✅ Modo confirmado: TRANSMISOR");
+                runOnUiThread(() -> {
+                    tvLoRaStatus.setText("📡 Modo: TRANSMISOR");
+                    Toast.makeText(this, "📡 Conectado a TX", Toast.LENGTH_SHORT).show();
+                    // Actualizar lista para mostrar/ocultar botones LoRa
+                    fileAdapter.notifyDataSetChanged();
+                });
+            } else if (mode.equals("RX")) {
+                isTxMode = false;
+                Log.d(TAG, "✅ Modo confirmado: RECEPTOR");
+                runOnUiThread(() -> {
+                    tvLoRaStatus.setText("📥 Modo: RECEPTOR");
+                    Toast.makeText(this, "📥 Conectado a RX", Toast.LENGTH_SHORT).show();
+                    // Actualizar lista para mostrar/ocultar botones LoRa
+                    fileAdapter.notifyDataSetChanged();
+                });
+            }
             return;
         }
 
@@ -1061,19 +1081,28 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     // ════════════════════════════════════════════════════════════════════
 
     private void detectDeviceMode() {
+        // ✅ SOLO detección por nombre (fallback inicial)
         if (deviceName != null) {
             isTxMode = deviceName.toUpperCase().contains("TX");
 
-            Log.d(TAG, "🔍 Modo detectado: " + (isTxMode ? "TX" : "RX"));
+            Log.d(TAG, "🔍 Modo detectado por nombre: " + (isTxMode ? "TX" : "RX"));
 
             runOnUiThread(() -> {
                 if (isTxMode) {
-                    tvLoRaStatus.setText("📡 Modo: TRANSMISOR");
+                    tvLoRaStatus.setText("📡 Modo: TRANSMISOR (detectado por nombre)");
                 } else {
-                    tvLoRaStatus.setText("📥 Modo: RECEPTOR");
+                    tvLoRaStatus.setText("📥 Modo: RECEPTOR (detectado por nombre)");
                 }
             });
+        } else {
+            // Si no hay nombre, mostrar estado inicial
+            Log.d(TAG, "⚠️ Sin nombre de dispositivo, esperando conexión...");
+            runOnUiThread(() -> {
+                tvLoRaStatus.setText("🔍 Detectando modo...");
+            });
         }
+
+        // ✅ El comando CMD:GET_MODE se enviará automáticamente en onConnected()
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1204,9 +1233,10 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         // Mostrar diálogo
         new AlertDialog.Builder(this)
-                .setTitle("⚙️ Configuración LoRa BROADCAST")  // ✅ CAMBIO
+                .setTitle("⚙️ Configuración LoRa BROADCAST")
+                .setMessage("✅ Los cambios se guardarán en la memoria flash del Heltec\n\n")  // ✅ NUEVO
                 .setView(dialogView)
-                .setPositiveButton("✅ Aplicar", (dialog, which) -> {
+                .setPositiveButton("✅ Aplicar y Guardar", (dialog, which) -> {  // ✅ CAMBIO texto
                     // Obtener valores seleccionados
                     String bwText = spinnerBW.getSelectedItem().toString();
                     currentLoRaConfig.bandwidth = Integer.parseInt(bwText.split(" ")[0]);
@@ -1217,7 +1247,6 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                     String crText = spinnerCR.getSelectedItem().toString();
                     currentLoRaConfig.codingRate = Integer.parseInt(crText.split("/")[1]);
 
-                    // ✅ CAMBIO: Parsear repeticiones
                     String repeatText = spinnerRepeat.getSelectedItem().toString();
                     currentLoRaConfig.repeat = Integer.parseInt(repeatText.split(" ")[0]);
 
@@ -1229,9 +1258,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 })
                 .setNegativeButton("❌ Cancelar", null)
                 .setNeutralButton("🔄 Obtener Actual", (dialog, which) -> {
-                    // Solicitar configuración actual
                     bleManager.sendCommand("CMD:GET_LORA_CONFIG");
-                    Toast.makeText(this, "📡 Solicitando configuración...",
+                    Toast.makeText(this, "📡 Solicitando configuración guardada...",
                             Toast.LENGTH_SHORT).show();
                 })
                 .show();
@@ -1249,7 +1277,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         updateLoRaStatusUI();
 
-        Toast.makeText(this, "✅ Configuración enviada", Toast.LENGTH_SHORT).show();
+        // ✅ CAMBIO: Informar que se guarda persistentemente
+        Toast.makeText(this, "✅ Config enviada y guardada en el Heltec", Toast.LENGTH_SHORT).show();
     }
 
     // ════════════════════════════════════════════════════════════════════

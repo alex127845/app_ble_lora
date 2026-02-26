@@ -8,6 +8,7 @@
 #include <BLE2902.h>
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
+#include <Preferences.h>  // ✅ NUEVO: Para persistir configuración
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 CONFIGURACIÓN - PINES HELTEC V3
@@ -30,23 +31,21 @@
 #define DATA_READ_UUID      "beb5483e-36e1-4688-b7f5-ea07361b26a9"
 #define PROGRESS_UUID       "beb5483e-36e1-4688-b7f5-ea07361b26aa"
 
+// ✅ NUEVO: Definir modo TX para identificación
+#define IS_TX_MODE
+
 // ════════════════════════════════════════════════════════════════
 // 🔧 CONFIGURACIÓN - PROTOCOLO BROADCAST
 // ════════════════════════════════════════════════════════════════
 
-#define CHUNK_SIZE_BLE    200   // Chunks para BLE (bytes)
-#define CHUNK_SIZE_LORA   240   // Chunks para LoRa (bytes)
+#define CHUNK_SIZE_BLE    200
+#define CHUNK_SIZE_LORA   240
 #define MAX_FILENAME_LENGTH 64
-#define MAX_RETRIES       3     // Reintentos por fallo de radio
-#define FEC_BLOCK_SIZE    8     // Bloques FEC (1 parity cada 8 chunks)
-#define MANIFEST_REPEAT   5     // Repeticiones del manifest
-#define MANIFEST_INTERVAL 50    // Re-enviar manifest cada N chunks
+#define MAX_RETRIES       3
+#define FEC_BLOCK_SIZE    8
+#define MANIFEST_REPEAT   5
+#define MANIFEST_INTERVAL 50
 
-// ✅ FIX #1: Interleaving DESACTIVADO hasta validar RX
-// El stride de 37 no garantiza cobertura completa si totalChunks
-// y 37 no son coprimos (e.g. totalChunks múltiplo de 37).
-// El RX debe ordenar por chunkIndex del header, no por orden de llegada.
-// Mantenerlo en false hasta confirmar que el RX reordena correctamente.
 #define ENABLE_INTERLEAVING false
 
 // Magic bytes para protocolo
@@ -65,7 +64,7 @@
 
 SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
-// Parámetros LoRa configurables — valores por defecto seguros
+// ✅ MEJORADO: Valores por defecto seguros
 float currentBW     = 125.0;
 int   currentSF     = 9;
 int   currentCR     = 7;
@@ -81,8 +80,10 @@ uint32_t totalLoRaRetries     = 0;
 uint32_t currentFileID        = 0;
 uint32_t lastFileSize         = 0;
 
-// ✅ FIX #4: Contador estático para File ID único
 static uint32_t fileIDCounter = 0;
+
+// ✅ NUEVO: Objeto Preferences para persistencia
+Preferences preferences;
 
 // ════════════════════════════════════════════════════════════════
 // 🌐 VARIABLES GLOBALES - BLE
@@ -122,6 +123,10 @@ void setupBLE();
 void setupLoRa();
 void applyLoRaConfig();
 void enableVext(bool on);
+
+// ✅ NUEVO: Funciones para persistencia
+void loadLoRaConfig();
+void saveLoRaConfig();
 
 void handleCommand(String command);
 void sendResponse(String response);
@@ -223,9 +228,10 @@ void setup() {
 
   Serial.println("\n");
   Serial.println("════════════════════════════════════════════════");
-  Serial.println("  📡 File Transfer System v4.1 TX BROADCAST");
+  Serial.println("  📡 File Transfer System v4.2 TX BROADCAST");
   Serial.println("  Heltec WiFi LoRa 32 V3");
   Serial.println("  MODO: TRANSMISOR BROADCAST (SIN ACK)");
+  Serial.println("  ✅ CON PERSISTENCIA DE CONFIGURACIÓN");
   Serial.println("════════════════════════════════════════════════");
   Serial.println();
 
@@ -233,6 +239,9 @@ void setup() {
   setupBLE();
   delay(1000);
   setupLoRa();
+
+  // ✅ NUEVO: Cargar configuración guardada
+  loadLoRaConfig();
 
   Serial.println("\n✅ Sistema TX BROADCAST listo");
   Serial.println("👂 Esperando conexión BLE...");
@@ -256,8 +265,6 @@ void loop() {
   }
 
   // Procesar transmisión LoRa si está activa
-  // NOTA: processLoRaTransmission() llama yield() internamente
-  // cada chunk para no bloquear el WDT ni el stack BLE.
   if (transmitting) {
     processLoRaTransmission();
   }
@@ -377,7 +384,53 @@ void setupLoRa() {
   Serial.println("✅ SX1262 inicializado");
   radio.standby();
   delay(100);
+}
+
+// ════════════════════════════════════════════════════════════════
+// ✅ NUEVO: CARGAR CONFIGURACIÓN LORA DESDE MEMORIA FLASH
+// ════════════════════════════════════════════════════════════════
+
+void loadLoRaConfig() {
+  Serial.println("\n💾 Cargando configuración LoRa desde memoria flash...");
+  
+  preferences.begin("lora-config", true);  // Modo solo lectura
+  
+  // Cargar valores (si no existen, usar defaults)
+  currentBW     = preferences.getFloat("bw", 125.0);
+  currentSF     = preferences.getInt("sf", 9);
+  currentCR     = preferences.getInt("cr", 7);
+  currentREPEAT = preferences.getInt("repeat", 2);
+  currentPower  = preferences.getInt("power", 17);
+  
+  preferences.end();
+  
+  Serial.println("✅ Configuración LoRa cargada:");
+  Serial.printf("   BW: %.0f kHz\n", currentBW);
+  Serial.printf("   SF: %d\n", currentSF);
+  Serial.printf("   CR: 4/%d\n", currentCR);
+  Serial.printf("   REPEAT: %d\n", currentREPEAT);
+  Serial.printf("   POWER: %d dBm\n", currentPower);
+  
+  // Aplicar configuración al radio
   applyLoRaConfig();
+}
+
+// ════════════════════════════════════════════════════════════════
+// ✅ NUEVO: GUARDAR CONFIGURACIÓN LORA EN MEMORIA FLASH
+// ════════════════════════════════════════════════════════════════
+
+void saveLoRaConfig() {
+  preferences.begin("lora-config", false);  // Modo escritura
+  
+  preferences.putFloat("bw", currentBW);
+  preferences.putInt("sf", currentSF);
+  preferences.putInt("cr", currentCR);
+  preferences.putInt("repeat", currentREPEAT);
+  preferences.putInt("power", currentPower);
+  
+  preferences.end();
+  
+  Serial.println("💾 ✅ Configuración LoRa guardada en memoria flash");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -438,6 +491,16 @@ void handleCommand(String command) {
 
   if (command == "CMD:LIST") {
     listFiles();
+  }
+  // ✅ NUEVO: Comando para identificar modo TX/RX
+  else if (command == "CMD:GET_MODE") {
+    #ifdef IS_TX_MODE
+      sendResponse("MODE:TX");
+      Serial.println("📤 Modo identificado: TX");
+    #else
+      sendResponse("MODE:RX");
+      Serial.println("📥 Modo identificado: RX");
+    #endif
   }
   else if (command.startsWith("CMD:DELETE:")) {
     deleteFile(command.substring(11));
@@ -684,10 +747,8 @@ void sendFileInChunks(String filename) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// ⚙️  CONFIGURACIÓN LORA - SET
-// ✅ FIX #2: Validar cada campo antes de aplicarlo.
-//    Si el JSON llega incompleto, se conservan los valores actuales
-//    en lugar de sobrescribirlos con 0.
+// ���️  CONFIGURACIÓN LORA - SET
+// ✅ MEJORADO: Ahora guarda en memoria flash
 // ════════════════════════════════════════════════════════════════
 
 void setLoRaConfig(String jsonStr) {
@@ -705,10 +766,7 @@ void setLoRaConfig(String jsonStr) {
     return;
   }
 
-  // ✅ Solo actualizar si el campo existe Y es un valor válido.
-  //    Esto previene que un JSON parcial o malformado desde Android
-  //    zerée los parámetros de modulación.
-
+  // Validar y actualizar parámetros
   if (doc.containsKey("bw")) {
     float bw = doc["bw"].as<float>();
     if (bw == 125.0 || bw == 250.0 || bw == 500.0) {
@@ -754,9 +812,12 @@ void setLoRaConfig(String jsonStr) {
     }
   }
 
+  // ✅ NUEVO: Guardar en memoria flash
+  saveLoRaConfig();
+  
   applyLoRaConfig();
   sendResponse("OK:LORA_CONFIG_SET");
-  Serial.println("✅ Configuración LoRa actualizada");
+  Serial.println("✅ Configuración LoRa actualizada y guardada");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -840,7 +901,6 @@ void processLoRaTransmission() {
 
 bool sendManifest(uint32_t fileID, uint32_t totalSize, uint16_t totalChunks, const String& fileName) {
   uint8_t nameLen = (uint8_t)min((size_t)fileName.length(), (size_t)100);
-  // Header(2) + fileID(4) + totalSize(4) + totalChunks(2) + chunkSize(2) + nameLen(1) + name + CRC(2)
   uint8_t manifestPkt[2 + 4 + 4 + 2 + 2 + 1 + 100 + 2];
   size_t idx = 0;
 
@@ -874,11 +934,9 @@ bool sendManifest(uint32_t fileID, uint32_t totalSize, uint16_t totalChunks, con
 
 // ════════════════════════════════════════════════════════════════
 // ✅ TRANSMITIR DATA CHUNK (con CRC16)
-// ✅ FIX #3: yield() en cada reintento para no bloquear BLE stack
 // ════════════════════════════════════════════════════════════════
 
 bool sendDataChunk(uint32_t fileID, uint16_t chunkIndex, uint16_t totalChunks, uint8_t* data, size_t len) {
-  // Header(2) + fileID(4) + chunkIndex(2) + totalChunks(2) + data + CRC(2)
   uint8_t dataPkt[2 + 4 + 2 + 2 + CHUNK_SIZE_LORA + 2];
   size_t idx = 0;
 
@@ -903,7 +961,7 @@ bool sendDataChunk(uint32_t fileID, uint16_t chunkIndex, uint16_t totalChunks, u
     Serial.printf("⚠️  Reintento %d/%d en chunk %u\n", retries + 1, MAX_RETRIES, chunkIndex);
     radio.standby();
     delay(100);
-    yield();  // ✅ Ceder CPU al stack BLE/WDT entre reintentos
+    yield();
   }
 
   Serial.printf("❌ CRÍTICO: Fallo persistente en chunk %u\n", chunkIndex);
@@ -937,9 +995,6 @@ bool sendParityChunk(uint32_t fileID, uint16_t blockIndex, uint8_t* parityData, 
 
 // ════════════════════════════════════════════════════════════════
 // ✅ TRANSMITIR FILE_END
-// ✅ FIX #5: Reintentar 5 veces para asegurar que el RX lo recibe.
-//    Sin esto, si el único FILE_END se pierde, el RX nunca sabe
-//    que la transmisión terminó y puede descartar el archivo.
 // ════════════════════════════════════════════════════════════════
 
 bool sendFileEnd(uint32_t fileID, uint16_t totalChunks) {
@@ -976,17 +1031,6 @@ bool sendFileEnd(uint32_t fileID, uint16_t totalChunks) {
 
 // ════════════════════════════════════════════════════════════════
 // ✅ ENVIAR ARCHIVO CON CARRUSEL + FEC
-//
-// CORRECCIONES APLICADAS:
-//   FIX #1 - Interleaving desactivado (ENABLE_INTERLEAVING = false)
-//            El stride de 37 puede generar índices repetidos si
-//            totalChunks no es coprimo con 37. Mientras el RX no
-//            confirme que reordena por chunkIndex del header, es
-//            más seguro transmitir en orden secuencial.
-//
-//   FIX #4 - File ID robusto: millis() XOR fileIDCounter (incremental)
-//            Evita colisiones si se transmite el mismo archivo dos
-//            veces consecutivas con millis() similar.
 // ════════════════════════════════════════════════════════════════
 
 bool sendFileViaLoRa(const char* path) {
@@ -1004,7 +1048,6 @@ bool sendFileViaLoRa(const char* path) {
 
   uint16_t totalChunks = (totalSize + CHUNK_SIZE_LORA - 1) / CHUNK_SIZE_LORA;
 
-  // ✅ FIX #4: File ID único y robusto
   currentFileID = (uint32_t)millis() ^ (totalSize << 8) ^ (++fileIDCounter);
 
   Serial.printf("╔════════════════════════════════════════╗\n");
@@ -1018,15 +1061,11 @@ bool sendFileViaLoRa(const char* path) {
 
   int dynamicDelay = getInterPacketDelay();
 
-  // ============================================================
-  // CARRUSEL: Repetir N vueltas completas
-  // ============================================================
   for (int round = 1; round <= currentREPEAT; round++) {
     Serial.printf("\n╔════════════════════════════════════════╗\n");
     Serial.printf("║       🔁 VUELTA %d de %d\n", round, currentREPEAT);
     Serial.printf("╚════════════════════════════════════════╝\n\n");
 
-    // ── MANIFEST x5 ──────────────────────────────────────────
     Serial.println("📤 Enviando MANIFEST (5 repeticiones)...");
     for (int m = 0; m < MANIFEST_REPEAT; m++) {
       if (!sendManifest(currentFileID, totalSize, totalChunks, fileName)) {
@@ -1038,7 +1077,6 @@ bool sendFileViaLoRa(const char* path) {
     Serial.println("✅ MANIFEST OK\n");
     delay(300);
 
-    // ── DATA CHUNKS ───────────────────────────────────────────
     f.seek(0);
 
     uint8_t fecBlock[FEC_BLOCK_SIZE][CHUNK_SIZE_LORA];
@@ -1048,12 +1086,7 @@ bool sendFileViaLoRa(const char* path) {
 
     for (uint16_t i = 0; i < totalChunks; i++) {
 
-      // ✅ FIX #1: Orden SECUENCIAL — sin interleaving.
-      //    Con interleaving activado, f.seek() salta a posiciones
-      //    pseudoaleatorias pero el RX recibe chunkIndex en el header,
-      //    por lo que el receptor DEBE reordenar por índice, no por
-      //    orden de llegada. Confirmar esto en el RX antes de activar.
-      uint16_t index = i;  // Secuencial siempre seguro
+      uint16_t index = i;
 
       f.seek((uint32_t)index * CHUNK_SIZE_LORA);
 
@@ -1061,12 +1094,10 @@ bool sendFileViaLoRa(const char* path) {
       size_t  bytesRead = f.read(buffer, CHUNK_SIZE_LORA);
       if (bytesRead == 0) break;
 
-      // Guardar en buffer FEC
       memcpy(fecBlock[fecIndex], buffer, bytesRead);
       fecLengths[fecIndex] = bytesRead;
       fecIndex++;
 
-      // Transmitir chunk
       if (!sendDataChunk(currentFileID, index, totalChunks, buffer, bytesRead)) {
         f.close();
         return false;
@@ -1074,7 +1105,6 @@ bool sendFileViaLoRa(const char* path) {
 
       totalLoRaPacketsSent++;
 
-      // Mostrar progreso cada ~5%
       uint16_t currentPercent = ((i + 1) * 100) / totalChunks;
       if (currentPercent >= lastProgressPercent + 5 || i + 1 == totalChunks) {
         Serial.printf("📦 Progreso: %u/%u (%.1f%%) - Vuelta %d\n",
@@ -1082,7 +1112,6 @@ bool sendFileViaLoRa(const char* path) {
                       (float)(i + 1) * 100.0 / totalChunks,
                       round);
 
-        // Progreso BLE escalado a la vuelta actual
         uint8_t bleProgress = (uint8_t)(((round - 1) * 100 + currentPercent) / currentREPEAT);
         sendProgress(bleProgress);
         lastProgressPercent = currentPercent;
@@ -1090,7 +1119,6 @@ bool sendFileViaLoRa(const char* path) {
 
       delay(dynamicDelay);
 
-      // ── FEC PARITY cada FEC_BLOCK_SIZE chunks ────────────────
       if (fecIndex == FEC_BLOCK_SIZE || i + 1 == totalChunks) {
         uint8_t parityData[CHUNK_SIZE_LORA];
         memset(parityData, 0, CHUNK_SIZE_LORA);
@@ -1113,16 +1141,14 @@ bool sendFileViaLoRa(const char* path) {
         delay(dynamicDelay);
       }
 
-      // ── Manifest periódico ────────────────────────────────────
       if ((i + 1) % MANIFEST_INTERVAL == 0) {
         sendManifest(currentFileID, totalSize, totalChunks, fileName);
         delay(dynamicDelay + 30);
       }
 
-      yield();  // ✅ Evitar WDT y ceder CPU al BLE stack
+      yield();
     }
 
-    // ── FILE_END al terminar cada vuelta (con 5 reintentos) ──
     Serial.printf("\n🏁 Enviando FILE_END (vuelta %d)...\n", round);
     sendFileEnd(currentFileID, totalChunks);
     delay(500);

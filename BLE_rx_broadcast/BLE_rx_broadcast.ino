@@ -8,6 +8,7 @@
 #include <BLE2902.h>
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
+#include <Preferences.h>  // ✅ NUEVO: Para persistir configuración
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 PINES HELTEC WIFI LORA 32 V3
@@ -30,19 +31,17 @@
 #define DATA_READ_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a9"
 #define PROGRESS_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26aa"
 
+// ✅ NUEVO: Modo RX (NO definir IS_TX_MODE)
+// #define IS_TX_MODE  // Comentado porque este es RX
+
 // ════════════════════════════════════════════════════════════════
 // 🔧 PROTOCOLO BROADCAST
 // ════════════════════════════════════════════════════════════════
 
-#define CHUNK_SIZE_BLE  200    // Chunks para transferencia BLE (bytes)
-#define CHUNK_SIZE_LORA 240    // Chunks LoRa (debe coincidir con TX)
-#define RX_TIMEOUT      60000  // 60s sin paquetes → timeout
+#define CHUNK_SIZE_BLE  200
+#define CHUNK_SIZE_LORA 240
+#define RX_TIMEOUT      60000
 
-// ✅ FIX #1: MAX_CHUNKS aumentado de 512 a 4096.
-//    512 chunks × 240 bytes = 120 KB máximo.
-//    4096 chunks × 240 bytes = ~1 MB.
-//    El TX web/BLE usa MAX_CHUNKS 4096, si el RX tiene 512 descarta
-//    cualquier chunk con índice >= 512 en archivos grandes.
 #define MAX_CHUNKS      4096
 
 #define FEC_BLOCK_SIZE  8
@@ -81,10 +80,6 @@ uint16_t      totalChunks     = 0;
 unsigned long lastPacketTime  = 0;
 unsigned long receptionStartTime = 0;
 
-// ✅ FIX #2: chunkBuffer y arrays relacionados movidos a heap.
-//    En el original eran arrays estáticos de 512 punteros en el stack.
-//    Con MAX_CHUNKS=4096 en stack se provoca stack overflow inmediato.
-//    Se inicializan en setupLoRaBuffers() con calloc/malloc.
 uint8_t**  chunkBuffer   = nullptr;
 bool*      chunkReceived = nullptr;
 uint16_t*  chunkLengths  = nullptr;
@@ -104,12 +99,12 @@ int16_t  avgRSSI              = 0;
 float    avgSNR               = 0;
 int      rssiCount            = 0;
 
-// ✅ FIX #3: Cooldown anti-carrusel (igual que RX web).
-//    Sin esto, cada vuelta del TX inicia una sesión nueva y sobrescribe
-//    el archivo recién guardado correctamente.
 #define FILE_ID_COOLDOWN       60000
 uint32_t      lastProcessedFileID    = 0;
 unsigned long lastFileCompletionTime = 0;
+
+// ✅ NUEVO: Objeto Preferences para persistencia
+Preferences preferences;
 
 // ════════════════════════════════════════════════════════════════
 // 🌐 VARIABLES GLOBALES - BLE
@@ -144,6 +139,10 @@ void setupLoRa();
 void setupLoRaBuffers();
 void applyLoRaConfig();
 void enableVext(bool on);
+
+// ✅ NUEVO: Funciones para persistencia
+void loadLoRaConfig();
+void saveLoRaConfig();
 
 void handleCommand(String command);
 void sendResponse(String response);
@@ -245,19 +244,23 @@ void setup() {
   delay(2000);
 
   Serial.println("\n════════════════════════════════════════════════");
-  Serial.println("  📡 File Transfer System v4.1 RX BROADCAST");
+  Serial.println("  📡 File Transfer System v4.2 RX BROADCAST");
   Serial.println("  Heltec WiFi LoRa 32 V3");
   Serial.println("  MODO: RECEPTOR BROADCAST (SIN ACK)");
+  Serial.println("  ✅ CON PERSISTENCIA DE CONFIGURACIÓN");
   Serial.println("════════════════════════════════════════════════\n");
 
   setupLittleFS();
 
-  // ✅ Inicializar buffers en heap ANTES de BLE y LoRa
+  // Inicializar buffers en heap ANTES de BLE y LoRa
   setupLoRaBuffers();
 
   setupBLE();
   delay(1000);
   setupLoRa();
+
+  // ✅ NUEVO: Cargar configuración guardada
+  loadLoRaConfig();
 
   Serial.println("\n✅ Sistema RX BROADCAST listo");
   Serial.println("👂 Esperando conexión BLE y broadcast LoRa...\n");
@@ -329,8 +332,7 @@ void setupLittleFS() {
 
 // ════════════════════════════════════════════════════════════════
 // 🗃️  INICIALIZAR BUFFERS LORA EN HEAP
-// ✅ FIX #2: Evita stack overflow con MAX_CHUNKS=4096.
-// ════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════���═════════════════
 
 void setupLoRaBuffers() {
   Serial.println("\n🗃️  Inicializando buffers LoRa en heap...");
@@ -356,7 +358,7 @@ void setupLoRaBuffers() {
                  MAX_PARITY_BLOCKS * (sizeof(uint8_t*) + sizeof(bool) + sizeof(uint16_t))) / 1024);
 }
 
-// ════════════════════════════════════════════════════════════════
+// ���═══════════════════════════════════════════════════════════════
 // 📡 BLE - INICIALIZACIÓN
 // ════════════════════════════════════════════════════════════════
 
@@ -428,16 +430,60 @@ void setupLoRa() {
 
   Serial.println("✅ SX1262 inicializado");
 
-  applyLoRaConfig();
-
   radio.setDio1Action(setFlag);
+}
 
-  state = radio.startReceive();
+// ═════��══════════════════════════════════════════════════════════
+// ✅ NUEVO: CARGAR CONFIGURACIÓN LORA DESDE MEMORIA FLASH
+// ════════════════════════════════════════════════════════════════
+
+void loadLoRaConfig() {
+  Serial.println("\n💾 Cargando configuración LoRa desde memoria flash...");
+  
+  preferences.begin("lora-config", true);  // Modo solo lectura
+  
+  currentBW     = preferences.getFloat("bw", 125.0);
+  currentSF     = preferences.getInt("sf", 9);
+  currentCR     = preferences.getInt("cr", 7);
+  currentREPEAT = preferences.getInt("repeat", 2);
+  currentPower  = preferences.getInt("power", 17);
+  
+  preferences.end();
+  
+  Serial.println("✅ Configuración LoRa cargada:");
+  Serial.printf("   BW: %.0f kHz\n", currentBW);
+  Serial.printf("   SF: %d\n", currentSF);
+  Serial.printf("   CR: 4/%d\n", currentCR);
+  Serial.printf("   REPEAT: %d\n", currentREPEAT);
+  Serial.printf("   POWER: %d dBm\n", currentPower);
+  
+  applyLoRaConfig();
+  
+  // Iniciar recepción
+  int state = radio.startReceive();
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("📻 Radio en RX continuo BROADCAST");
   } else {
     Serial.printf("❌ Error startReceive: %d\n", state);
   }
+}
+
+// ════════════════════════════════════════════════════════════════
+// ✅ NUEVO: GUARDAR CONFIGURACIÓN LORA EN MEMORIA FLASH
+// ════════════════════════════════════════════════════════════════
+
+void saveLoRaConfig() {
+  preferences.begin("lora-config", false);  // Modo escritura
+  
+  preferences.putFloat("bw", currentBW);
+  preferences.putInt("sf", currentSF);
+  preferences.putInt("cr", currentCR);
+  preferences.putInt("repeat", currentREPEAT);
+  preferences.putInt("power", currentPower);
+  
+  preferences.end();
+  
+  Serial.println("💾 ✅ Configuración LoRa guardada en memoria flash");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -471,6 +517,16 @@ void handleCommand(String command) {
   command.trim();
 
   if      (command == "CMD:LIST")                    listFiles();
+  // ✅ NUEVO: Comando para identificar modo TX/RX
+  else if (command == "CMD:GET_MODE") {
+    #ifdef IS_TX_MODE
+      sendResponse("MODE:TX");
+      Serial.println("📤 Modo identificado: TX");
+    #else
+      sendResponse("MODE:RX");
+      Serial.println("📥 Modo identificado: RX");
+    #endif
+  }
   else if (command.startsWith("CMD:DELETE:"))        deleteFile(command.substring(11));
   else if (command.startsWith("CMD:DOWNLOAD:"))      startDownload(command.substring(13));
   else if (command.startsWith("CMD:SET_LORA_CONFIG:")) setLoRaConfig(command.substring(20));
@@ -615,9 +671,7 @@ void sendFileInChunks(String filename) {
 
 // ════════════════════════════════════════════════════════════════
 // ⚙️  CONFIGURACIÓN LORA - SET
-// ✅ FIX #4: Validar cada campo antes de aplicarlo.
-//    Sin validación, un JSON incompleto desde la app zerearía
-//    los parámetros de modulación exactamente como en el TX BLE.
+// ✅ MEJORADO: Ahora guarda en memoria flash
 // ════════════════════════════════════════════════════════════════
 
 void setLoRaConfig(String jsonStr) {
@@ -660,6 +714,9 @@ void setLoRaConfig(String jsonStr) {
     else Serial.printf("⚠️  POWER inválido (%d), ignorado\n", pwr);
   }
 
+  // ✅ NUEVO: Guardar en memoria flash
+  saveLoRaConfig();
+
   applyLoRaConfig();
 
   // Reiniciar recepción con nueva configuración
@@ -667,7 +724,7 @@ void setLoRaConfig(String jsonStr) {
   radio.startReceive();
 
   sendResponse("OK:LORA_CONFIG_SET");
-  Serial.println("✅ Configuración LoRa actualizada");
+  Serial.println("✅ Configuración LoRa actualizada y guardada");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -690,10 +747,6 @@ void sendCurrentLoRaConfig() {
 
 // ════════════════════════════════════════════════════════════════
 // 📡 LORA RX - PROCESAR PAQUETE
-// ✅ FIX #5: CRC verificado ANTES de hacer dispatch por magic bytes.
-//    En el original el dispatch ocurría sin CRC previo; un paquete
-//    basura con los magic bytes correctos podía corromper el estado
-//    de la sesión o los buffers de chunks.
 // ════════════════════════════════════════════════════════════════
 
 void processLoRaPacket() {
@@ -707,10 +760,8 @@ void processLoRaPacket() {
 
   size_t len = radio.getPacketLength();
 
-  // Mínimo viable: 2 magic + 4 fileID + 2 CRC = 8
   if (len < 8) { radio.startReceive(); return; }
 
-  // ✅ CRC primero
   uint16_t crcRecv, crcCalc;
   memcpy(&crcRecv, buffer + len - 2, 2);
   crcCalc = crc16_ccitt(buffer, len - 2);
@@ -720,7 +771,6 @@ void processLoRaPacket() {
     return;
   }
 
-  // Actualizar estadísticas RF
   int16_t rssi = (int16_t)radio.getRSSI();
   float   snr  = radio.getSNR();
   avgRSSI = (int16_t)((avgRSSI * rssiCount + rssi) / (rssiCount + 1));
@@ -729,7 +779,6 @@ void processLoRaPacket() {
 
   lastPacketTime = millis();
 
-  // Dispatch por magic bytes (CRC ya validado)
   if      (buffer[0] == MANIFEST_MAGIC_1  && buffer[1] == MANIFEST_MAGIC_2)  handleManifest(buffer, len);
   else if (buffer[0] == DATA_MAGIC_1      && buffer[1] == DATA_MAGIC_2)      handleDataChunk(buffer, len);
   else if (buffer[0] == PARITY_MAGIC_1    && buffer[1] == PARITY_MAGIC_2)    handleParityChunk(buffer, len);
@@ -743,7 +792,6 @@ void processLoRaPacket() {
 // ════════════════════════════════════════════════════════════════
 
 void handleManifest(uint8_t* data, size_t len) {
-  // Mínimo: 2+4+4+2+2+1+1+2 = 18
   if (len < 18) return;
 
   uint32_t fileID, fileSize;
@@ -765,34 +813,28 @@ void handleManifest(uint8_t* data, size_t len) {
 
   manifestCount++;
 
-  // ✅ FIX #3: Ignorar si FileID ya fue completado recientemente
   if (fileID == lastProcessedFileID &&
       (millis() - lastFileCompletionTime) < FILE_ID_COOLDOWN) {
-    return;  // Vuelta extra del carrusel — sin print para no saturar serial
+    return;
   }
 
-  // Mismo FileID activo → manifest duplicado dentro de la misma vuelta
   if (receivingFile && currentFileID == fileID) {
     Serial.printf("🔁 Manifest duplicado (vuelta %u)\n", manifestCount);
     return;
   }
 
-  // FileID diferente → nuevo archivo, finalizar anterior
   if (receivingFile && currentFileID != fileID) {
     Serial.println("\n⚠️  Nuevo FileID — ensamblando archivo anterior");
     assembleFile();
     delay(200);
   }
 
-  // Nueva sesión
   if (!receivingFile) {
-    // ✅ FIX #6: Verificar que totalChunksRx no supera MAX_CHUNKS
     if (totalChunksRx == 0 || totalChunksRx > MAX_CHUNKS) {
       Serial.printf("❌ totalChunks inválido: %u (max %u)\n", totalChunksRx, MAX_CHUNKS);
       return;
     }
 
-    // Verificar espacio en LittleFS
     uint32_t freeSpace = LittleFS.totalBytes() - LittleFS.usedBytes();
     if (fileSize > freeSpace) {
       Serial.printf("❌ Sin espacio: necesito %u KB, libre %u KB\n",
@@ -835,7 +877,6 @@ void handleManifest(uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void handleDataChunk(uint8_t* data, size_t len) {
-  // 2 magic + 4 fileID + 2 chunkIndex + 2 totalChunks + 1 data + 2 CRC = 13
   if (len < 13 || !receivingFile) return;
 
   uint32_t fileID;
@@ -857,7 +898,6 @@ void handleDataChunk(uint8_t* data, size_t len) {
 
   size_t dataLen = len - idx - 2;
 
-  // ✅ FIX #7: Validar que offset + dataLen no supera el tamaño del archivo
   uint32_t fileOffset = (uint32_t)chunkIndex * receivingChunkSize;
   if (fileOffset + dataLen > receivingFileSize) {
     dataLen = receivingFileSize - fileOffset;
@@ -870,7 +910,6 @@ void handleDataChunk(uint8_t* data, size_t len) {
     chunkReceived[chunkIndex] = true;
     receivedDataChunks++;
 
-    // Progreso cada 5%
     static uint16_t lastPct = 0;
     uint16_t pct = (receivedDataChunks * 100) / totalChunks;
     if (pct >= lastPct + 5 || receivedDataChunks == totalChunks) {
@@ -891,7 +930,6 @@ void handleDataChunk(uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void handleParityChunk(uint8_t* data, size_t len) {
-  // 2 magic + 4 fileID + 2 blockIndex + 1 data + 2 CRC = 11
   if (len < 11 || !receivingFile) return;
 
   uint32_t fileID;
@@ -919,9 +957,6 @@ void handleParityChunk(uint8_t* data, size_t len) {
 
 // ════════════════════════════════════════════════════════════════
 // 📡 LORA RX - FILE_END
-// ✅ FIX #8: Espera no bloqueante para capturar chunks retrasados.
-//    El delay(1000) original bloqueaba la ISR y el radio no podía
-//    notificar paquetes nuevos durante ese segundo.
 // ════════════════════════════════════════════════════════════════
 
 void handleFileEnd(uint8_t* data, size_t len) {
@@ -961,10 +996,6 @@ void handleFileEnd(uint8_t* data, size_t len) {
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 FEC RECOVERY
-// ✅ FIX #9: Leer el tamaño correcto del último chunk.
-//    En el original se leía siempre chunkLengths[i] bytes, pero
-//    el XOR debía hacerse sobre exactamente maxLen bytes del bloque
-//    de paridad. Ahora se usa min(maxLen, chunkLengths[i]).
 // ════════════════════════════════════════════════════════════════
 
 void recoverMissingChunks() {
@@ -1001,7 +1032,6 @@ void recoverMissingChunks() {
       if (i == missing) continue;
       if (!chunkReceived[baseIdx + i]) continue;
 
-      // ✅ FIX #9: min() para no XOR más allá del contenido real del chunk
       size_t xorLen = min(maxLen, (size_t)chunkLengths[baseIdx + i]);
       for (size_t k = 0; k < xorLen; k++)
         chunkBuffer[missingIdx][k] ^= chunkBuffer[baseIdx + i][k];
@@ -1021,10 +1051,6 @@ void recoverMissingChunks() {
 
 // ════════════════════════════════════════════════════════════════
 // 📝 ENSAMBLAR ARCHIVO
-// ✅ FIX #10: Calcular fillSize correctamente para el último chunk.
-//    En el original siempre se rellenaban CHUNK_SIZE_LORA bytes,
-//    pero el último chunk puede ser más corto; esto generaba un
-//    archivo más grande que receivingFileSize.
 // ════════════════════════════════════════════════════════════════
 
 void assembleFile() {
@@ -1059,7 +1085,6 @@ void assembleFile() {
       size_t written = outFile.write(chunkBuffer[i], chunkLengths[i]);
       writtenBytes += written;
     } else {
-      // ✅ FIX #10: Calcular bytes restantes exactos para este chunk
       uint32_t remaining = (receivingFileSize > writtenBytes)
                            ? receivingFileSize - writtenBytes
                            : 0;
@@ -1073,7 +1098,6 @@ void assembleFile() {
       }
     }
 
-    // yield periódico para no bloquear WDT en archivos grandes
     if (i % 32 == 0) yield();
   }
 
@@ -1105,7 +1129,6 @@ void assembleFile() {
                String(completeness, 1));
   sendProgress(100);
 
-  // ✅ FIX #3: Registrar FileID como completado
   lastProcessedFileID    = currentFileID;
   lastFileCompletionTime = millis();
 
@@ -1132,10 +1155,9 @@ void cancelReception(String reason) {
 
 // ════════════════════════════════════════════════════════════════
 // 🔄 RESETEAR BUFFERS
-// ════════════════════════════════════════════════════════════════
+// ════════════════════════════��═══════════════════════════════════
 
 void resetReceptionBuffers() {
-  // Liberar chunks de datos
   for (uint16_t i = 0; i < MAX_CHUNKS; i++) {
     if (chunkBuffer[i] != nullptr) {
       free(chunkBuffer[i]);
@@ -1145,7 +1167,6 @@ void resetReceptionBuffers() {
     chunkLengths[i]  = 0;
   }
 
-  // Liberar parity blocks
   for (uint16_t i = 0; i < MAX_PARITY_BLOCKS; i++) {
     if (parityBuffer[i] != nullptr) {
       free(parityBuffer[i]);
