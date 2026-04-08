@@ -62,9 +62,9 @@
             android:layout_marginTop="12dp"
             android:gravity="end">
 
-            <!-- Botón LoRa TX (NUEVO) -->
+            <!-- Botón ESP-NOW TX -->
             <Button
-                android:id="@+id/btnLoRaTx"
+                android:id="@+id/btnESPNowTx"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
                 android:text="📡"
