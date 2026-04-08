@@ -68,14 +68,6 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private TextView tvProgressText;
     private View layoutProgress;
 
-    // LoRa
-    //private CardView cardLoRaConfig;
-    //private TextView tvLoRaStatus;
-    //private Button btnConfigLoRa;
-    //private View layoutLoRaTransmitting;
-    //private TextView tvLoRaProgress;
-    //private ProgressBar progressBarLoRa;
-
     private CardView cardESPNowConfig;
     private TextView tvESPNowStatus;
     private Button btnConfigESPNow;
@@ -96,11 +88,10 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     // Lista de archivos en el Heltec
     private List<FileInfo> fileList = new ArrayList<>();
 
-    // Estado LoRa
+    // Estado ESP-NOW
     private boolean isTxMode = false;  // true si es TX, false si es RX
     private boolean isTransmitting = false;
 
-    //private LoRaConfig currentLoRaConfig;
     private ESPNowConfig currentESPNowConfig;
 
     // ════════════════════════════════════════════════════════════════════
@@ -173,15 +164,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         layoutProgress.setVisibility(View.GONE);
 
         // ════════════════════════════════════════════════════════════════
-        // NUEVOS - Vistas LoRa
+        // NUEVOS - Vistas ESP-NOW
         // ════════════════════════════════════════════════════════════════
-
-        //cardLoRaConfig = findViewById(R.id.cardLoRaConfig);
-        //tvLoRaStatus = findViewById(R.id.tvLoRaStatus);
-        //btnConfigLoRa = findViewById(R.id.btnConfigLoRa);
-        //layoutLoRaTransmitting = findViewById(R.id.layoutLoRaTransmitting);
-        //tvLoRaProgress = findViewById(R.id.tvLoRaProgress);
-        //progressBarLoRa = findViewById(R.id.progressBarLoRa);
 
         cardESPNowConfig = findViewById(R.id.cardESPNowConfig);
         tvESPNowStatus = findViewById(R.id.tvESPNowStatus);
@@ -190,20 +174,18 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         tvESPNowProgress = findViewById(R.id.tvESPNowProgress);
         progressBarESPNow = findViewById(R.id.progressBarESPNow);
 
-        // Inicializar configuración LoRa
-        //currentLoRaConfig = new LoRaConfig();
+        // Inicializar configuración ESP-NOW
         currentESPNowConfig = new ESPNowConfig();
-        updateLoRaStatusUI();
+        updateESPNowStatusUI();
 
-        // Configurar botón de config LoRa
-        //btnConfigLoRa.setOnClickListener(v -> showLoRaConfigDialog());
-        btnConfigLoRa.setOnClickListener(v -> showESPNowConfigDialog());
+        // Configurar botón de config ESP-NOW
+        btnConfigESPNow.setOnClickListener(v -> showESPNowConfigDialog());
 
-        // Ocultar progreso LoRa
-        layoutLoRaTransmitting.setVisibility(View.GONE);
+        // Ocultar progreso ESP-NOW
+        layoutESPNowTransmitting.setVisibility(View.GONE);
 
         // ✅ NUEVO: Mostrar modo como "detectando..." hasta confirmar
-        tvLoRaStatus.setText("🔍 Detectando modo...");
+        tvESPNowStatus.setText("🔍 Detectando modo...");
 
         // Detectar modo TX/RX del nombre del dispositivo
         detectDeviceMode();
@@ -561,8 +543,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 // ✅ IMPORTANTE: Enviar comando para detectar modo
                 bleManager.sendCommand("CMD:GET_MODE");
 
-                // Obtener configuración LoRa
-                //bleManager.sendCommand("CMD:GET_LORA_CONFIG");
+                // Obtener configuración ESP-NOW
                 bleManager.sendCommand("CMD:GET_ESPNOW_CONFIG");
             }, 500);
         });
@@ -755,29 +736,6 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             Toast.makeText(this, "❌ " + mensaje, Toast.LENGTH_LONG).show();
         }
 
-        // Config LoRa recibida
-        /*
-        if (data.startsWith("LORA_CONFIG:")) {
-            String json = data.substring(12);
-            Log.d(TAG, "⚙️ Configuración LoRa recibida: " + json);
-            currentLoRaConfig.fromJson(json);
-            updateLoRaStatusUI();
-            // ✅ CAMBIO: Informar que es config persistida
-            Toast.makeText(this, "✅ Config LoRa cargada (guardada en flash)",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }*/
-
-        // Confirmación de config LoRa
-        /*
-        if (data.equals("OK:LORA_CONFIG_SET")) {
-            Log.d(TAG, "✅ Configuración LoRa aplicada y guardada");
-
-            // ✅ CAMBIO: Informar persistencia
-            Toast.makeText(this, "✅ Configuración guardada en memoria flash",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }*/
         // Config ESP-NOW recibida
         if (data.startsWith("ESPNOW_CONFIG:")) {
             String json = data.substring(14);
@@ -799,17 +757,17 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
 
 
-        // Inicio de transmisión LoRa BROADCAST
+        // Inicio de transmisión ESP-NOW BROADCAST
         if (data.equals("OK:TX_STARTING_BROADCAST")) {  // ✅ CAMBIO
-            Log.d(TAG, "📡 Transmisión LoRa BROADCAST iniciada");
-            showLoRaProgress(true, "Transmitiendo (Broadcast)...", 0);
+            Log.d(TAG, "📡 Transmisión ESP-NOW BROADCAST iniciada");
+            showESPNowProgress(true, "Transmitiendo (Broadcast)...", 0);
             return;
         }
 
-        // Transmisión LoRa BROADCAST completada
+        // Transmisión ESP-NOW BROADCAST completada
         if (data.startsWith("TX_COMPLETE_BROADCAST:")) {  // ✅ CAMBIO
             isTransmitting = false;
-            showLoRaProgress(false, "", 0);
+            showESPNowProgress(false, "", 0);
 
             String[] parts = data.substring(23).split(":");  // ✅ CAMBIO: offset 23
             if (parts.length >= 4) {  // ✅ CAMBIO: ahora son 4 partes
@@ -834,31 +792,31 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return;
         }
 
-        // Transmisión LoRa fallida
+        // Transmisión ESP-NOW fallida
         if (data.startsWith("TX_FAILED:")) {
             isTransmitting = false;
-            showLoRaProgress(false, "", 0);
+            showESPNowProgress(false, "", 0);
 
             String reason = data.substring(10);
             Toast.makeText(this, "❌ TX fallida: " + reason, Toast.LENGTH_LONG).show();
             return;
         }
 
-        // Inicio de recepción LoRa (solo RX)
+        // Inicio de recepción ESP-NOW (solo RX)
         if (data.startsWith("RX_START:")) {
             String[] parts = data.substring(9).split(":");
             if (parts.length >= 2) {
                 String filename = parts[0];
                 String size = parts[1];
 
-                showLoRaProgress(true, "Recibiendo " + filename + "...", 0);
+                showESPNowProgress(true, "Recibiendo " + filename + "...", 0);
                 Toast.makeText(this, "📥 Recibiendo: " + filename,
                         Toast.LENGTH_SHORT).show();
             }
             return;
         }
 
-        // Status de recepción LoRa
+        // Status de recepción ESP-NOW
         if (data.startsWith("RX_STATUS:")) {
             String[] parts = data.substring(10).split(":");
             if (parts.length >= 2) {
@@ -870,15 +828,15 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                     int total = Integer.parseInt(progressParts[1]);
                     int percentage = (current * 100) / total;
 
-                    updateLoRaProgress(percentage, "Fragmento " + progress);
+                    updateESPNowProgress(percentage, "Fragmento " + progress);
                 }
             }
             return;
         }
 
-        // Recepción LoRa completada
+        // Recepción ESP-NOW completada
         if (data.startsWith("RX_COMPLETE:")) {
-            showLoRaProgress(false, "", 0);
+            showESPNowProgress(false, "", 0);
 
             String[] parts = data.substring(12).split(":");
             if (parts.length >= 3) {
@@ -903,9 +861,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return;
         }
 
-        // Recepción LoRa fallida
+        // Recepción ESP-NOW fallida
         if (data.startsWith("RX_FAILED:")) {
-            showLoRaProgress(false, "", 0);
+            showESPNowProgress(false, "", 0);
 
             String reason = data.substring(10);
             Toast.makeText(this, "❌ RX fallida: " + reason, Toast.LENGTH_LONG).show();
@@ -920,18 +878,18 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 isTxMode = true;
                 Log.d(TAG, "✅ Modo confirmado: TRANSMISOR");
                 runOnUiThread(() -> {
-                    tvLoRaStatus.setText("📡 Modo: TRANSMISOR");
+                    tvESPNowStatus.setText("📡 Modo: TRANSMISOR");
                     Toast.makeText(this, "📡 Conectado a TX", Toast.LENGTH_SHORT).show();
-                    // Actualizar lista para mostrar/ocultar botones LoRa
+                    // Actualizar lista para mostrar/ocultar botones ESP-NOW
                     fileAdapter.notifyDataSetChanged();
                 });
             } else if (mode.equals("RX")) {
                 isTxMode = false;
                 Log.d(TAG, "✅ Modo confirmado: RECEPTOR");
                 runOnUiThread(() -> {
-                    tvLoRaStatus.setText("📥 Modo: RECEPTOR");
+                    tvESPNowStatus.setText("📥 Modo: RECEPTOR");
                     Toast.makeText(this, "📥 Conectado a RX", Toast.LENGTH_SHORT).show();
-                    // Actualizar lista para mostrar/ocultar botones LoRa
+                    // Actualizar lista para mostrar/ocultar botones ESP-NOW
                     fileAdapter.notifyDataSetChanged();
                 });
             }
@@ -1009,16 +967,16 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 deleteFile(fileInfo);
             });
 
-            // ⬇️ NUEVO - Botón transmitir por LoRa
-            holder.btnLoRaTx.setOnClickListener(v -> {
-                transmitFileViaLoRa(fileInfo);
+            // ⬇️ NUEVO - Botón transmitir por ESP-NOW
+            holder.btnESPNowTx.setOnClickListener(v -> {
+                transmitFileViaESPNow(fileInfo);
             });
 
-            // Mostrar botón LoRa solo si es modo TX
+            // Mostrar botón ESP-NOW solo si es modo TX
             if (isTxMode) {
-                holder.btnLoRaTx.setVisibility(View.VISIBLE);
+                holder.btnESPNowTx.setVisibility(View.VISIBLE);
             } else {
-                holder.btnLoRaTx.setVisibility(View.GONE);
+                holder.btnESPNowTx.setVisibility(View.GONE);
             }
         }
 
@@ -1032,7 +990,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             TextView tvFileSize;
             Button btnDownload;
             Button btnDelete;
-            Button btnLoRaTx;  // ⬇️ NUEVO
+            Button btnESPNowTx;  // ⬇️ NUEVO
 
             ViewHolder(View itemView) {
                 super(itemView);
@@ -1040,83 +998,10 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 tvFileSize = itemView.findViewById(R.id.tvFileSize);
                 btnDownload = itemView.findViewById(R.id.btnDownload);
                 btnDelete = itemView.findViewById(R.id.btnDelete);
-                btnLoRaTx = itemView.findViewById(R.id.btnLoRaTx);  // ⬇️ NUEVO
+                btnESPNowTx = itemView.findViewById(R.id.btnESPNowTx);  // ⬇️ NUEVO
             }
         }
     }
-    /**
-     * ══════════════════════════════════════════════════════════════
-     * ⚙️ CLASE - LoRaConfig
-     * ══════════════════════════════════════════════════════════════
-     */
-    /*
-    private static class LoRaConfig {
-        int bandwidth;       // 125, 250, 500
-        int spreadingFactor; // 7, 9, 12
-        int codingRate;      // 5, 7, 8
-        int repeat;          // ✅ CAMBIO: 1, 2, 3, 5 (vueltas carrusel)
-        int power;           // 10, 14, 17, 20
-
-        LoRaConfig() {
-            // Valores por defecto
-            bandwidth = 125;
-            spreadingFactor = 9;
-            codingRate = 7;
-            repeat = 2;  // ✅ CAMBIO: 2 vueltas por defecto
-            power = 17;
-        }
-
-        String toJson() {
-            return "{\"bw\":" + bandwidth +
-                    ",\"sf\":" + spreadingFactor +
-                    ",\"cr\":" + codingRate +
-                    ",\"repeat\":" + repeat +  // ✅ CAMBIO: "repeat" en vez de "ack"
-                    ",\"power\":" + power + "}";
-        }
-
-        void fromJson(String json) {
-            try {
-                json = json.replace("{", "").replace("}", "").replace("\"", "");
-                String[] pairs = json.split(",");
-
-                for (String pair : pairs) {
-                    String[] keyValue = pair.split(":");
-                    if (keyValue.length == 2) {
-                        String key = keyValue[0].trim();
-                        int value = Integer.parseInt(keyValue[1].trim());
-
-                        switch (key) {
-                            case "bw":
-                                bandwidth = value;
-                                break;
-                            case "sf":
-                                spreadingFactor = value;
-                                break;
-                            case "cr":
-                                codingRate = value;
-                                break;
-                            case "repeat":  // ✅ CAMBIO: "repeat" en vez de "ack"
-                                repeat = value;
-                                break;
-                            case "power":
-                                power = value;
-                                break;
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error parseando LoRa config: " + e.getMessage());
-            }
-        }
-
-        @Override
-        public String toString() {
-            return "BW: " + bandwidth + " kHz, SF: " + spreadingFactor +
-                    ", CR: 4/" + codingRate + ", Vueltas: " + repeat +  // ✅ CAMBIO
-                    ", Power: " + power + " dBm";
-        }
-    }
-    */
     private static class ESPNowConfig {
         int power;           // 2-20 dBm
         int channel;         // 1-13
@@ -1189,16 +1074,16 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
             runOnUiThread(() -> {
                 if (isTxMode) {
-                    tvLoRaStatus.setText("📡 Modo: TRANSMISOR (detectado por nombre)");
+                    tvESPNowStatus.setText("📡 Modo: TRANSMISOR (detectado por nombre)");
                 } else {
-                    tvLoRaStatus.setText("📥 Modo: RECEPTOR (detectado por nombre)");
+                    tvESPNowStatus.setText("📥 Modo: RECEPTOR (detectado por nombre)");
                 }
             });
         } else {
             // Si no hay nombre, mostrar estado inicial
             Log.d(TAG, "⚠️ Sin nombre de dispositivo, esperando conexión...");
             runOnUiThread(() -> {
-                tvLoRaStatus.setText("🔍 Detectando modo...");
+                tvESPNowStatus.setText("🔍 Detectando modo...");
             });
         }
 
@@ -1206,165 +1091,31 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 ACTUALIZAR UI DE ESTADO LORA
+    // 🎨 MOSTRAR/OCULTAR PROGRESO ESP-NOW
     // ════════════════════════════════════════════════════════════════════
 
-    private void updateLoRaStatusUI() {
-        runOnUiThread(() -> {
-            String configText = currentLoRaConfig.toString();
-            btnConfigLoRa.setText("⚙️ Config: " + configText);
-        });
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    // 🎨 MOSTRAR/OCULTAR PROGRESO LORA
-    // ════════════════════════════════════════════════════════════════════
-
-    private void showLoRaProgress(boolean show, String text, int progress) {
+    private void showESPNowProgress(boolean show, String text, int progress) {
         runOnUiThread(() -> {
             if (show) {
-                layoutLoRaTransmitting.setVisibility(View.VISIBLE);
-                tvLoRaProgress.setText(text);
-                progressBarLoRa.setProgress(progress);
+                layoutESPNowTransmitting.setVisibility(View.VISIBLE);
+                tvESPNowProgress.setText(text);
+                progressBarESPNow.setProgress(progress);
             } else {
-                layoutLoRaTransmitting.setVisibility(View.GONE);
+                layoutESPNowTransmitting.setVisibility(View.GONE);
             }
         });
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 ACTUALIZAR PROGRESO LORA
+    // 🎨 ACTUALIZAR PROGRESO ESP-NOW
     // ════════════════════════════════════════════════════════════════════
 
-    private void updateLoRaProgress(int percentage, String text) {
+    private void updateESPNowProgress(int percentage, String text) {
         runOnUiThread(() -> {
-            progressBarLoRa.setProgress(percentage);
-            tvLoRaProgress.setText(text);
+            progressBarESPNow.setProgress(percentage);
+            tvESPNowProgress.setText(text);
         });
     }
-
-    // ════════════════════════════════════════════════════════════════════
-    // ⚙️ MOSTRAR DIÁLOGO DE CONFIGURACIÓN LORA
-    // ════════════════════════════════════════════════════════════════════
-    /*
-    private void showLoRaConfigDialog() {
-        if (!isConnected) {
-            Toast.makeText(this, "⚠️ No conectado", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Log.d(TAG, "⚙️ Mostrando diálogo de configuración LoRa");
-
-        // Crear vista personalizada
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_lora_config, null);
-
-        // Obtener vistas
-        Spinner spinnerBW = dialogView.findViewById(R.id.spinnerBW);
-        Spinner spinnerSF = dialogView.findViewById(R.id.spinnerSF);
-        Spinner spinnerCR = dialogView.findViewById(R.id.spinnerCR);
-        Spinner spinnerRepeat = dialogView.findViewById(R.id.spinnerRepeat);  // ✅ CAMBIO
-        Spinner spinnerPower = dialogView.findViewById(R.id.spinnerPower);
-
-        // Configurar adaptadores
-        ArrayAdapter<String> adapterBW = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"125 kHz", "250 kHz", "500 kHz"});
-        adapterBW.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerBW.setAdapter(adapterBW);
-
-        ArrayAdapter<String> adapterSF = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"SF 7", "SF 9", "SF 12"});
-        adapterSF.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerSF.setAdapter(adapterSF);
-
-        ArrayAdapter<String> adapterCR = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"4/5", "4/7", "4/8"});
-        adapterCR.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerCR.setAdapter(adapterCR);
-
-        // ✅ CAMBIO: Spinner de repeticiones en lugar de ACK
-        ArrayAdapter<String> adapterRepeat = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"1 vuelta", "2 vueltas", "3 vueltas", "5 vueltas"});
-        adapterRepeat.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerRepeat.setAdapter(adapterRepeat);
-
-        ArrayAdapter<String> adapterPower = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item,
-                new String[]{"10 dBm", "14 dBm", "17 dBm", "20 dBm"});
-        adapterPower.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerPower.setAdapter(adapterPower);
-
-        // Seleccionar valores actuales
-        switch (currentLoRaConfig.bandwidth) {
-            case 125: spinnerBW.setSelection(0); break;
-            case 250: spinnerBW.setSelection(1); break;
-            case 500: spinnerBW.setSelection(2); break;
-        }
-
-        switch (currentLoRaConfig.spreadingFactor) {
-            case 7: spinnerSF.setSelection(0); break;
-            case 9: spinnerSF.setSelection(1); break;
-            case 12: spinnerSF.setSelection(2); break;
-        }
-
-        switch (currentLoRaConfig.codingRate) {
-            case 5: spinnerCR.setSelection(0); break;
-            case 7: spinnerCR.setSelection(1); break;
-            case 8: spinnerCR.setSelection(2); break;
-        }
-
-        // ✅ CAMBIO: Selección de repeticiones
-        switch (currentLoRaConfig.repeat) {
-            case 1: spinnerRepeat.setSelection(0); break;
-            case 2: spinnerRepeat.setSelection(1); break;
-            case 3: spinnerRepeat.setSelection(2); break;
-            case 5: spinnerRepeat.setSelection(3); break;
-        }
-
-        switch (currentLoRaConfig.power) {
-            case 10: spinnerPower.setSelection(0); break;
-            case 14: spinnerPower.setSelection(1); break;
-            case 17: spinnerPower.setSelection(2); break;
-            case 20: spinnerPower.setSelection(3); break;
-        }
-
-        // Mostrar diálogo
-        new AlertDialog.Builder(this)
-                .setTitle("⚙️ Configuración LoRa BROADCAST")
-                .setMessage("✅ Los cambios se guardarán en la memoria flash del Heltec\n\n")  // ✅ NUEVO
-                .setView(dialogView)
-                .setPositiveButton("✅ Aplicar y Guardar", (dialog, which) -> {  // ✅ CAMBIO texto
-                    // Obtener valores seleccionados
-                    String bwText = spinnerBW.getSelectedItem().toString();
-                    currentLoRaConfig.bandwidth = Integer.parseInt(bwText.split(" ")[0]);
-
-                    String sfText = spinnerSF.getSelectedItem().toString();
-                    currentLoRaConfig.spreadingFactor = Integer.parseInt(sfText.split(" ")[1]);
-
-                    String crText = spinnerCR.getSelectedItem().toString();
-                    currentLoRaConfig.codingRate = Integer.parseInt(crText.split("/")[1]);
-
-                    String repeatText = spinnerRepeat.getSelectedItem().toString();
-                    currentLoRaConfig.repeat = Integer.parseInt(repeatText.split(" ")[0]);
-
-                    String powerText = spinnerPower.getSelectedItem().toString();
-                    currentLoRaConfig.power = Integer.parseInt(powerText.split(" ")[0]);
-
-                    // Enviar configuración al Heltec
-                    applyLoRaConfig();
-                })
-                .setNegativeButton("❌ Cancelar", null)
-                .setNeutralButton("🔄 Obtener Actual", (dialog, which) -> {
-                    bleManager.sendCommand("CMD:GET_LORA_CONFIG");
-                    Toast.makeText(this, "📡 Solicitando configuración guardada...",
-                            Toast.LENGTH_SHORT).show();
-                })
-                .show();
-    }
-    */
 
     private void showESPNowConfigDialog() {
         if (!isConnected) {
@@ -1446,21 +1197,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
 
     // ════════════════════════════════════════════════════════════════════
-    // ⚙️ APLICAR CONFIGURACIÓN LORA
+    // ⚙️ APLICAR CONFIGURACIÓN ESP-NOW
     // ════════════════════════════════════════════════════════════════════
-    /*
-    private void applyLoRaConfig() {
-        Log.d(TAG, "⚙️ Aplicando configuración LoRa: " + currentLoRaConfig.toString());
-
-        String command = "CMD:SET_LORA_CONFIG:" + currentLoRaConfig.toJson();
-        bleManager.sendCommand(command);
-
-        updateLoRaStatusUI();
-
-        // ✅ CAMBIO: Informar que se guarda persistentemente
-        Toast.makeText(this, "✅ Config enviada y guardada en el Heltec", Toast.LENGTH_SHORT).show();
-    }
-    */
     private void applyESPNowConfig() {
         Log.d(TAG, "⚙️ Aplicando configuración ESP-NOW: " + currentESPNowConfig.toString());
 
@@ -1475,16 +1213,15 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private void updateESPNowStatusUI() {
         runOnUiThread(() -> {
             String configText = currentESPNowConfig.toString();
-            btnConfigLoRa.setText("⚙️ Config: " + configText);
+            btnConfigESPNow.setText("⚙️ Config: " + configText);
         });
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 TRANSMITIR ARCHIVO POR LORA (solo TX)
+    // 📡 TRANSMITIR ARCHIVO POR ESP-NOW (solo TX)
     // ════════════════════════════════════════════════════════════════════
 
-    // 📡 TRANSMITIR ARCHIVO POR LORA (línea 1274)
-    private void transmitFileViaLoRa(FileInfo fileInfo) {
+    private void transmitFileViaESPNow(FileInfo fileInfo) {
         if (!isTxMode) {
             Toast.makeText(this, "⚠️ Solo disponible en modo TX",
                     Toast.LENGTH_SHORT).show();
@@ -1497,24 +1234,23 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             return;
         }
 
-        Log.d(TAG, "📡 Preparando transmisión LoRa BROADCAST: " + fileInfo.name);
+        Log.d(TAG, "📡 Preparando transmisión ESP-NOW BROADCAST: " + fileInfo.name);
 
         final FileInfo file = fileInfo;
 
         // Mostrar confirmación
         new AlertDialog.Builder(this)
-                .setTitle("📡 Transmitir por LoRa BROADCAST")  // ✅ CAMBIO
-                .setMessage("¿Transmitir '" + file.name + "' por LoRa?\n\n" +
-                        "⚠️ MODO BROADCAST:\n" +  // ✅ NUEVO
+                .setTitle("📡 Transmitir por ESP-NOW BROADCAST")
+                .setMessage("¿Transmitir '" + file.name + "' por ESP-NOW?\n\n" +
+                        "⚠️ MODO BROADCAST:\n" +
                         "- Sin confirmación del receptor\n" +
-                        "- Transmisión repetida (" + currentLoRaConfig.repeat + " vueltas)\n" +
                         "- FEC + Interleaving activados\n\n" +
                         "Tamaño: " + formatFileSize(file.size) + "\n" +
-                        "Configuración: " + currentLoRaConfig.toString() + "\n\n" +
+                        "Configuración: " + currentESPNowConfig.toString() + "\n\n" +
                         "Asegúrate de que el RX esté escuchando.")
                 .setPositiveButton("📡 Transmitir", (dialog, which) -> {
                     isTransmitting = true;
-                    showLoRaProgress(true, "Iniciando transmisión BROADCAST...", 0);
+                    showESPNowProgress(true, "Iniciando transmisión BROADCAST...", 0);
 
                     bleManager.sendCommand("CMD:TX_FILE:" + file.name);
 
