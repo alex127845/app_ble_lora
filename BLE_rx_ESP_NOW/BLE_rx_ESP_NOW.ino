@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 CONFIGURACIÓN - ESP32 V3
@@ -181,7 +182,8 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 // 🔌 ESP-NOW CALLBACK
 // ════════════════════════════════════════════════════════════════
 
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData, int len) {
+  const uint8_t *mac = recv_info->src; 
   // Copiar datos a buffer para procesar en loop
   if (len > 0 && len <= 250) {
     packetReceived = true;
@@ -484,15 +486,14 @@ void applyESPNowConfig() {
   if (currentRate < 0 || currentRate > 3) currentRate = 1;
 
   // Cambiar canal
-  esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_primary_chan(currentChannel, WIFI_SECOND_CHAN_NONE);
   delay(100);
 
-  // Configurar potencia de transmisión
-  esp_wifi_set_max_tx_power(currentPower * 4);
-  delay(100);
+  // NOTA: En ESP32-S3, la potencia se controla a nivel de ESP-NOW
+  // No usar esp_wifi_set_max_tx_power en modo RX broadcast
 
   Serial.println("📻 Configuración ESP-NOW RX:");
-  Serial.printf("   Potencia: %d dBm\n", currentPower);
+  Serial.printf("   Potencia: %d dBm (máximo)\n", currentPower);
   Serial.printf("   Canal: %d\n", currentChannel);
   Serial.printf("   Velocidad: %s\n",
     currentRate == 0 ? "1 Mbps" :

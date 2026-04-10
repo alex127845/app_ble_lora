@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 CONFIGURACIÓN - ESP32 V3
@@ -172,7 +173,7 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 // 🔌 ESP-NOW CALLBACKS
 // ════════════════════════════════════════════════════════════════
 
-void onESPNowSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+void onESPNowSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   if (status != ESP_NOW_SEND_SUCCESS) {
     totalESPNowRetries++;
   }
