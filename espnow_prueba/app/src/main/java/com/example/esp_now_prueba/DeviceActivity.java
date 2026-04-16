@@ -1125,7 +1125,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         Log.d(TAG, "⚙️ Mostrando diálogo de configuración ESP-NOW");
 
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_espnow_config, null);
+        View dialogView = getLayoutInflater().inflate(R.layout.dialog_lora_config, null);
 
         Spinner spinnerPower = dialogView.findViewById(R.id.spinnerPower);
         Spinner spinnerChannel = dialogView.findViewById(R.id.spinnerChannel);

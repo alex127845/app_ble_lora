@@ -183,7 +183,7 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData, int len) {
-  const uint8_t *mac = recv_info->src; 
+  const uint8_t *mac = recv_info->src_addr;
   // Copiar datos a buffer para procesar en loop
   if (len > 0 && len <= 250) {
     packetReceived = true;
@@ -486,7 +486,7 @@ void applyESPNowConfig() {
   if (currentRate < 0 || currentRate > 3) currentRate = 1;
 
   // Cambiar canal
-  esp_wifi_set_primary_chan(currentChannel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   delay(100);
 
   // NOTA: En ESP32-S3, la potencia se controla a nivel de ESP-NOW
