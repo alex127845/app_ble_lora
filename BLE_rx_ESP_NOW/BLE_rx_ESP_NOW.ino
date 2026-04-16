@@ -972,7 +972,13 @@ void recoverMissingChunks() {
         chunkBuffer[missingIdx][k] ^= chunkBuffer[baseIdx + i][k];
     }
 
-    chunkLengths[missingIdx]  = maxLen;
+    size_t recoveredLen = maxLen;
+    if (missingIdx == (totalChunks - 1)) {
+      size_t expectedLastLen = receivingFileSize - ((size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW);
+      recoveredLen = min(recoveredLen, expectedLastLen);
+    }
+
+    chunkLengths[missingIdx]  = recoveredLen;
     chunkReceived[missingIdx] = true;
     receivedDataChunks++;
     recovered++;
@@ -1005,6 +1011,11 @@ void assembleFile() {
                 missingChunks, (missingChunks * 100.0) / totalChunks,
                 receivedParityChunks, duplicateChunks);
 
+  if (missingChunks > 0) {
+    cancelReception("MISSING_CHUNKS_AFTER_FEC:" + String(missingChunks));
+    return;
+  }
+
   if (LittleFS.exists(receivingFileName)) LittleFS.remove(receivingFileName);
 
   File outFile = LittleFS.open(receivingFileName, "w");
@@ -1016,22 +1027,9 @@ void assembleFile() {
   uint32_t writtenBytes = 0;
 
   for (uint16_t i = 0; i < totalChunks; i++) {
-    if (chunkReceived[i] && chunkBuffer[i] != nullptr) {
-      size_t written = outFile.write(chunkBuffer[i], chunkLengths[i]);
-      writtenBytes += written;
-    } else {
-      uint32_t remaining = (receivingFileSize > writtenBytes)
-                           ? receivingFileSize - writtenBytes
-                           : 0;
-      size_t fillSize = min((uint32_t)CHUNK_SIZE_ESPNOW, remaining);
-
-      if (fillSize > 0) {
-        uint8_t zeros[CHUNK_SIZE_ESPNOW] = {0};
-        outFile.write(zeros, fillSize);
-        writtenBytes += fillSize;
-        Serial.printf("⚠️  Chunk %u perdido (relleno %u bytes con zeros)\n", i, fillSize);
-      }
-    }
+    if (!chunkReceived[i] || chunkBuffer[i] == nullptr) continue;
+    size_t written = outFile.write(chunkBuffer[i], chunkLengths[i]);
+    writtenBytes += written;
 
     if (i % 32 == 0) yield();
   }
