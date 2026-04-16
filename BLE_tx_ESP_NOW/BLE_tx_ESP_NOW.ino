@@ -1065,7 +1065,11 @@ bool sendFileViaESPNow(const char* path) {
   uint8_t fecBlock[FEC_BLOCK_SIZE][CHUNK_SIZE_ESPNOW];
   size_t  fecLengths[FEC_BLOCK_SIZE];
   int     fecIndex = 0;
+  uint16_t currentFecBlockIndex = 0;
   uint16_t lastProgressPercent = 0;
+
+  memset(fecBlock, 0, sizeof(fecBlock));
+  memset(fecLengths, 0, sizeof(fecLengths));
 
   for (uint16_t i = 0; i < totalChunks; i++) {
 
@@ -1077,6 +1081,9 @@ bool sendFileViaESPNow(const char* path) {
     size_t  bytesRead = f.read(buffer, CHUNK_SIZE_ESPNOW);
     if (bytesRead == 0) break;
 
+    if (fecIndex == 0) currentFecBlockIndex = index / FEC_BLOCK_SIZE;
+
+    memset(fecBlock[fecIndex], 0, CHUNK_SIZE_ESPNOW);
     memcpy(fecBlock[fecIndex], buffer, bytesRead);
     fecLengths[fecIndex] = bytesRead;
     fecIndex++;
@@ -1110,12 +1117,10 @@ bool sendFileViaESPNow(const char* path) {
         if (fecLengths[j] > maxLen) maxLen = fecLengths[j];
 
       for (int j = 0; j < fecIndex; j++)
-        for (size_t k = 0; k < fecLengths[j]; k++)
+        for (size_t k = 0; k < maxLen; k++)
           parityData[k] ^= fecBlock[j][k];
 
-      uint16_t blockIndex = i / FEC_BLOCK_SIZE;
-
-      if (!sendParityChunk(currentFileID, blockIndex, parityData, maxLen))
+      if (!sendParityChunk(currentFileID, currentFecBlockIndex, parityData, maxLen))
         Serial.println("⚠️  Parity falló (continuando)");
 
       totalESPNowPacketsSent++;
