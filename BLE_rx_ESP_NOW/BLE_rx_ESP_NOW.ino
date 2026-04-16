@@ -189,6 +189,7 @@ void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData,
     packetReceived = true;
     lastPacketTime = millis();
     processESPNowPacket((uint8_t*)mac, (uint8_t*)incomingData, len);
+    yield();
   }
 }
 

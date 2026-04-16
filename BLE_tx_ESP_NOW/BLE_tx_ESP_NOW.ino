@@ -42,7 +42,7 @@
 #define MAX_RETRIES       3
 #define FEC_BLOCK_SIZE    8
 #define MANIFEST_REPEAT   5
-#define MANIFEST_INTERVAL 50
+#define MANIFEST_INTERVAL 10
 
 #define ENABLE_INTERLEAVING false
 
@@ -492,11 +492,10 @@ void applyESPNowConfig() {
 // ════════════════════════════════════════════════════════════════
 
 int getInterPacketDelay() {
-  // ESP-NOW es más rápido que LoRa
-  if (currentRate == 0) return 10;     // 1 Mbps
-  if (currentRate == 1) return 5;      // 2 Mbps (default)
-  if (currentRate == 2) return 3;      // 5.5 Mbps
-  return 2;                            // 11 Mbps
+  if (currentRate == 0) return 15;     // 1 Mbps
+  if (currentRate == 1) return 10;     // 2 Mbps (default)
+  if (currentRate == 2) return 8;      // 5.5 Mbps
+  return 5;                            // 11 Mbps
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -864,6 +863,14 @@ void processESPNowTransmission() {
 
   float transmissionTime = (millis() - espnowTransmissionStartTime) / 1000.0;
   float speed = (lastFileSize * 8.0) / (transmissionTime * 1000.0);
+  float theoreticalKbps =
+    currentRate == 0 ? 1000.0 :
+    currentRate == 1 ? 2000.0 :
+    currentRate == 2 ? 5500.0 : 11000.0;
+  float utilization = speed * 100.0 / theoreticalKbps;
+  float retryRate = (totalESPNowPacketsSent > 0)
+    ? (totalESPNowRetries * 100.0 / totalESPNowPacketsSent)
+    : 0.0;
 
   if (result) {
     String status = "TX_COMPLETE_BROADCAST:" + String(lastFileSize) + ":" +
@@ -874,8 +881,11 @@ void processESPNowTransmission() {
     Serial.println("\n✅ Transmisión ESP-NOW BROADCAST exitosa");
     Serial.printf("⏱️  Tiempo: %.2f s\n",       transmissionTime);
     Serial.printf("⚡ Velocidad: %.2f kbps\n",   speed);
+    Serial.printf("🎯 Velocidad teórica: %.2f kbps\n", theoreticalKbps);
+    Serial.printf("📈 Eficiencia real: %.2f%%\n", utilization);
     Serial.printf("📦 Paquetes: %u\n",           totalESPNowPacketsSent);
     Serial.printf("🔄 Fallos: %u\n",             totalESPNowRetries);
+    Serial.printf("📉 Tasa de pérdida TX estimada (reintentos): %.2f%%\n", retryRate);
     Serial.println("╔════════════════════════════════════════╗");
     Serial.printf("║  ⚡ VELOCIDAD: %.2f kbps              ║\n", speed);
     Serial.println("╚════════════════════════════════════════╝");
