@@ -974,8 +974,11 @@ void recoverMissingChunks() {
 
     size_t recoveredLen = maxLen;
     if (missingIdx == (totalChunks - 1)) {
-      size_t expectedLastLen = receivingFileSize - ((size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW);
-      recoveredLen = min(recoveredLen, expectedLastLen);
+      size_t lastChunkOffset = (size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW;
+      if (receivingFileSize > lastChunkOffset) {
+        size_t expectedLastLen = receivingFileSize - lastChunkOffset;
+        recoveredLen = min(recoveredLen, expectedLastLen);
+      }
     }
 
     chunkLengths[missingIdx]  = recoveredLen;
@@ -1027,6 +1030,7 @@ void assembleFile() {
   uint32_t writtenBytes = 0;
 
   for (uint16_t i = 0; i < totalChunks; i++) {
+    // Defensive check: if buffers are inconsistent, skip instead of writing invalid memory.
     if (!chunkReceived[i] || chunkBuffer[i] == nullptr) continue;
     size_t written = outFile.write(chunkBuffer[i], chunkLengths[i]);
     writtenBytes += written;
