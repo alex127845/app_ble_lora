@@ -867,9 +867,10 @@ void processESPNowTransmission() {
     currentRate == 0 ? 1000.0 :
     currentRate == 1 ? 2000.0 :
     currentRate == 2 ? 5500.0 : 11000.0;
-  float utilization = (theoreticalKbps > 0.0) ? (speed * 100.0 / theoreticalKbps) : 0.0;
-  uint32_t totalAttempts = totalESPNowPacketsSent + totalESPNowRetries;
-  float lossRate = (totalAttempts > 0) ? (totalESPNowRetries * 100.0 / totalAttempts) : 0.0;
+  float utilization = speed * 100.0 / theoreticalKbps;
+  float retryRate = (totalESPNowPacketsSent > 0)
+    ? (totalESPNowRetries * 100.0 / totalESPNowPacketsSent)
+    : 0.0;
 
   if (result) {
     String status = "TX_COMPLETE_BROADCAST:" + String(lastFileSize) + ":" +
@@ -884,7 +885,7 @@ void processESPNowTransmission() {
     Serial.printf("📈 Eficiencia real: %.2f%%\n", utilization);
     Serial.printf("📦 Paquetes: %u\n",           totalESPNowPacketsSent);
     Serial.printf("🔄 Fallos: %u\n",             totalESPNowRetries);
-    Serial.printf("📉 Tasa de pérdida TX: %.2f%%\n", lossRate);
+    Serial.printf("📉 Tasa de pérdida TX estimada (reintentos): %.2f%%\n", retryRate);
     Serial.println("╔════════════════════════════════════════╗");
     Serial.printf("║  ⚡ VELOCIDAD: %.2f kbps              ║\n", speed);
     Serial.println("╚════════════════════════════════════════╝");
