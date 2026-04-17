@@ -100,6 +100,7 @@ float    avgSNR               = 0;
 int      rssiCount            = 0;
 
 #ifndef FILE_ID_COOLDOWN
+// Cooldown corto para permitir retransmisiones rápidas del mismo archivo en pruebas.
 #define FILE_ID_COOLDOWN       5000
 #endif
 uint32_t      lastProcessedFileID    = 0;
@@ -221,16 +222,18 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData, int len) {
-  packetsSeen++;
   if (len <= 0 || len > ESPNOW_MAX_PACKET_LEN || recv_info == nullptr || incomingData == nullptr) {
+    portENTER_CRITICAL_ISR(&rxQueueMux);
     packetsDroppedInvalidLen++;
+    portEXIT_CRITICAL_ISR(&rxQueueMux);
     return;
   }
 
   portENTER_CRITICAL_ISR(&rxQueueMux);
+  packetsSeen++;
   if (rxQueueCount >= ESPNOW_RX_QUEUE_SIZE) {
-    portEXIT_CRITICAL_ISR(&rxQueueMux);
     packetsDroppedQueueFull++;
+    portEXIT_CRITICAL_ISR(&rxQueueMux);
     return;
   }
 
@@ -242,10 +245,10 @@ void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData,
 
   rxQueueHead = (rxQueueHead + 1) % ESPNOW_RX_QUEUE_SIZE;
   rxQueueCount++;
+  packetsQueued++;
   portEXIT_CRITICAL_ISR(&rxQueueMux);
 
   packetReceived = true;
-  packetsQueued++;
   lastPacketTime = millis();
 }
 
@@ -347,7 +350,9 @@ void loop() {
     packetsProcessed++;
     yield();
   }
-  packetReceived = false;
+  portENTER_CRITICAL(&rxQueueMux);
+  packetReceived = (rxQueueCount > 0);
+  portEXIT_CRITICAL(&rxQueueMux);
 
   // Reconexión BLE
   if (!deviceConnected && oldDeviceConnected) {
@@ -994,6 +999,11 @@ void handleDataChunk(uint8_t* data, size_t len) {
 
   if (fileID != currentFileID) {
     packetsDroppedFileMismatch++;
+    return;
+  }
+  if (totalChunksRx == 0 || totalChunksRx > MAX_CHUNKS) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk descartado: totalChunks del paquete inválido (%u)\n", totalChunksRx);
     return;
   }
   if (totalChunks == 0 || totalChunks > MAX_CHUNKS) {
