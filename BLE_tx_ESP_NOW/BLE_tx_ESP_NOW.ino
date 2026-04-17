@@ -42,7 +42,11 @@
 #define MAX_RETRIES       3
 #define FEC_BLOCK_SIZE    8
 #define MANIFEST_REPEAT   5
-#define MANIFEST_INTERVAL 10
+#define REPEAT_COUNT      3   // Reenviar archivo completo N veces para datacasting 1→N
+#define FILE_END_REPEAT   3   // Repeticiones de FILE_END por cada vuelta
+#define ROUND_DELAY_STEP_MS 2
+#define STAGGER_INTERVAL  7
+#define STAGGER_DELAY_MS  2
 
 #define ENABLE_INTERLEAVING false
 
@@ -492,10 +496,10 @@ void applyESPNowConfig() {
 // ════════════════════════════════════════════════════════════════
 
 int getInterPacketDelay() {
-  if (currentRate == 0) return 15;     // 1 Mbps
-  if (currentRate == 1) return 10;     // 2 Mbps (default)
-  if (currentRate == 2) return 8;      // 5.5 Mbps
-  return 5;                            // 11 Mbps
+  if (currentRate == 0) return 32;     // 1 Mbps
+  if (currentRate == 1) return 24;     // 2 Mbps (default)
+  if (currentRate == 2) return 16;     // 5.5 Mbps
+  return 12;                           // 11 Mbps
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1049,6 +1053,7 @@ bool sendFileViaESPNow(const char* path) {
   Serial.printf("║  📁 Archivo: %s\n", fileName.c_str());
   Serial.printf("║  📊 Tamaño: %u bytes (%.2f KB)\n", totalSize, totalSize / 1024.0);
   Serial.printf("║  📦 Chunks: %u\n", totalChunks);
+  Serial.printf("║  🔁 Vueltas: %u\n", REPEAT_COUNT);
   Serial.printf("║  🔀 Interleaving: %s\n", ENABLE_INTERLEAVING ? "ACTIVADO" : "DESACTIVADO");
   Serial.printf("║  🆔 File ID: 0x%08X\n", currentFileID);
   Serial.printf("╚════════════════════════════════════════╝\n\n");
@@ -1059,96 +1064,113 @@ bool sendFileViaESPNow(const char* path) {
   Serial.printf("║       📡 TRANSMISIÓN ESP-NOW\n");
   Serial.printf("╚════════════════════════════════════════╝\n\n");
 
-  Serial.println("📤 Enviando MANIFEST (5 repeticiones)...");
-  for (int m = 0; m < MANIFEST_REPEAT; m++) {
-    if (!sendManifest(currentFileID, totalSize, totalChunks, fileName)) {
-      f.close();
-      return false;
+  for (int round = 1; round <= REPEAT_COUNT; round++) {
+    uint32_t roundStart = millis();
+    uint16_t roundChunksSent = 0;
+    uint16_t roundChunkFailures = 0;
+    uint16_t roundParitySent = 0;
+    uint16_t roundManifestOk = 0;
+    uint16_t roundFileEndOk = 0;
+    uint16_t lastProgressPercent = 0;
+    // Aumentar delay por vuelta reduce colisiones cuando varios RX reciben el mismo broadcast.
+    int currentRoundDelay = dynamicDelay + (round - 1) * ROUND_DELAY_STEP_MS;
+
+    Serial.printf("\n🔁 Vuelta %d/%d (delay base %dms)\n", round, REPEAT_COUNT, currentRoundDelay);
+    Serial.printf("📤 Enviando MANIFEST (%d repeticiones)...\n", MANIFEST_REPEAT);
+    for (int m = 0; m < MANIFEST_REPEAT; m++) {
+      if (sendManifest(currentFileID, totalSize, totalChunks, fileName)) {
+        roundManifestOk++;
+      }
+      delay(currentRoundDelay + 10);
+      yield();
     }
-    delay(dynamicDelay + 10);
+    Serial.printf("✅ MANIFEST enviados: %u/%u\n", roundManifestOk, MANIFEST_REPEAT);
+    delay(100);
+
+    f.seek(0);
+
+    uint8_t fecBlock[FEC_BLOCK_SIZE][CHUNK_SIZE_ESPNOW];
+    size_t  fecLengths[FEC_BLOCK_SIZE];
+    int     fecIndex = 0;
+    uint16_t currentFecBlockIndex = 0;
+
+    memset(fecBlock, 0, sizeof(fecBlock));
+    memset(fecLengths, 0, sizeof(fecLengths));
+
+    for (uint16_t i = 0; i < totalChunks; i++) {
+      uint16_t index = i;
+      f.seek((uint32_t)index * CHUNK_SIZE_ESPNOW);
+
+      uint8_t buffer[CHUNK_SIZE_ESPNOW];
+      size_t  bytesRead = f.read(buffer, CHUNK_SIZE_ESPNOW);
+      if (bytesRead == 0) break;
+
+      if (fecIndex == 0) currentFecBlockIndex = index / FEC_BLOCK_SIZE;
+
+      memset(fecBlock[fecIndex], 0, CHUNK_SIZE_ESPNOW);
+      memcpy(fecBlock[fecIndex], buffer, bytesRead);
+      fecLengths[fecIndex] = bytesRead;
+      fecIndex++;
+
+      if (sendDataChunk(currentFileID, index, totalChunks, buffer, bytesRead)) {
+        totalESPNowPacketsSent++;
+        roundChunksSent++;
+      } else {
+        roundChunkFailures++;
+      }
+
+      uint16_t currentPercent = ((i + 1) * 100) / totalChunks;
+      if (currentPercent >= lastProgressPercent + 5 || i + 1 == totalChunks) {
+        Serial.printf("📦 [Vuelta %d] %u/%u (%.1f%%)\n",
+                      round, i + 1, totalChunks,
+                      (float)(i + 1) * 100.0 / totalChunks);
+        sendProgress(currentPercent);
+        lastProgressPercent = currentPercent;
+      }
+
+      if (fecIndex == FEC_BLOCK_SIZE || i + 1 == totalChunks) {
+        uint8_t parityData[CHUNK_SIZE_ESPNOW];
+        memset(parityData, 0, CHUNK_SIZE_ESPNOW);
+
+        size_t maxLen = 0;
+        for (int j = 0; j < fecIndex; j++)
+          if (fecLengths[j] > maxLen) maxLen = fecLengths[j];
+
+        for (int j = 0; j < fecIndex; j++)
+          for (size_t k = 0; k < maxLen; k++)
+            parityData[k] ^= fecBlock[j][k];
+
+        if (sendParityChunk(currentFileID, currentFecBlockIndex, parityData, maxLen)) {
+          totalESPNowPacketsSent++;
+          roundParitySent++;
+        } else {
+          Serial.println("⚠️  Parity falló (continuando)");
+        }
+
+        fecIndex = 0;
+        delay(currentRoundDelay + 1);
+      }
+
+      int staggerDelay = currentRoundDelay + ((i % STAGGER_INTERVAL) == 0 ? STAGGER_DELAY_MS : 0);
+      delay(staggerDelay);
+      yield();
+    }
+
+    Serial.printf("🏁 Enviando FILE_END (%d repeticiones)...\n", FILE_END_REPEAT);
+    for (int e = 0; e < FILE_END_REPEAT; e++) {
+      if (sendFileEnd(currentFileID, totalChunks)) roundFileEndOk++;
+      delay(currentRoundDelay + 14);
+      yield();
+    }
+
+    float roundTime = (millis() - roundStart) / 1000.0;
+    Serial.printf("📊 Vuelta %d: chunks=%u, fallos=%u, parity=%u, manifest_ok=%u, file_end_ok=%u, tiempo=%.2fs\n",
+                  round, roundChunksSent, roundChunkFailures, roundParitySent, roundManifestOk, roundFileEndOk, roundTime);
+
+    if (round < REPEAT_COUNT) {
+      delay(250);
+    }
   }
-  Serial.println("✅ MANIFEST OK\n");
-  delay(100);
-
-  f.seek(0);
-
-  uint8_t fecBlock[FEC_BLOCK_SIZE][CHUNK_SIZE_ESPNOW];
-  size_t  fecLengths[FEC_BLOCK_SIZE];
-  int     fecIndex = 0;
-  uint16_t currentFecBlockIndex = 0;
-  uint16_t lastProgressPercent = 0;
-
-  memset(fecBlock, 0, sizeof(fecBlock));
-  memset(fecLengths, 0, sizeof(fecLengths));
-
-  for (uint16_t i = 0; i < totalChunks; i++) {
-
-    uint16_t index = i;
-
-    f.seek((uint32_t)index * CHUNK_SIZE_ESPNOW);
-
-    uint8_t buffer[CHUNK_SIZE_ESPNOW];
-    size_t  bytesRead = f.read(buffer, CHUNK_SIZE_ESPNOW);
-    if (bytesRead == 0) break;
-
-    if (fecIndex == 0) currentFecBlockIndex = index / FEC_BLOCK_SIZE;
-
-    memset(fecBlock[fecIndex], 0, CHUNK_SIZE_ESPNOW);
-    memcpy(fecBlock[fecIndex], buffer, bytesRead);
-    fecLengths[fecIndex] = bytesRead;
-    fecIndex++;
-
-    if (!sendDataChunk(currentFileID, index, totalChunks, buffer, bytesRead)) {
-      f.close();
-      return false;
-    }
-
-    totalESPNowPacketsSent++;
-
-    uint16_t currentPercent = ((i + 1) * 100) / totalChunks;
-    if (currentPercent >= lastProgressPercent + 5 || i + 1 == totalChunks) {
-      Serial.printf("📦 Progreso: %u/%u (%.1f%%)\n",
-                    i + 1, totalChunks,
-                    (float)(i + 1) * 100.0 / totalChunks);
-
-      uint8_t bleProgress = currentPercent;
-      sendProgress(bleProgress);
-      lastProgressPercent = currentPercent;
-    }
-
-    delay(dynamicDelay);
-
-    if (fecIndex == FEC_BLOCK_SIZE || i + 1 == totalChunks) {
-      uint8_t parityData[CHUNK_SIZE_ESPNOW];
-      memset(parityData, 0, CHUNK_SIZE_ESPNOW);
-
-      size_t maxLen = 0;
-      for (int j = 0; j < fecIndex; j++)
-        if (fecLengths[j] > maxLen) maxLen = fecLengths[j];
-
-      for (int j = 0; j < fecIndex; j++)
-        for (size_t k = 0; k < maxLen; k++)
-          parityData[k] ^= fecBlock[j][k];
-
-      if (!sendParityChunk(currentFileID, currentFecBlockIndex, parityData, maxLen))
-        Serial.println("⚠️  Parity falló (continuando)");
-
-      totalESPNowPacketsSent++;
-      fecIndex = 0;
-      delay(dynamicDelay);
-    }
-
-    if ((i + 1) % MANIFEST_INTERVAL == 0) {
-      sendManifest(currentFileID, totalSize, totalChunks, fileName);
-      delay(dynamicDelay + 10);
-    }
-
-    yield();
-  }
-
-  Serial.printf("\n🏁 Enviando FILE_END...\n");
-  sendFileEnd(currentFileID, totalChunks);
-  delay(200);
 
   f.close();
 
