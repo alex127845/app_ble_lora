@@ -36,6 +36,8 @@
 #define CHUNK_SIZE_BLE    200
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
 #define RX_TIMEOUT        120000
+#define ESPNOW_MAX_PACKET_LEN 250
+#define ESPNOW_RX_QUEUE_SIZE  8
 
 #define MAX_CHUNKS      4096
 
@@ -97,9 +99,37 @@ int16_t  avgRSSI              = 0;
 float    avgSNR               = 0;
 int      rssiCount            = 0;
 
-#define FILE_ID_COOLDOWN       60000
+#ifndef FILE_ID_COOLDOWN
+// Cooldown corto para permitir retransmisiones rápidas del mismo archivo en pruebas.
+#define FILE_ID_COOLDOWN       5000
+#endif
 uint32_t      lastProcessedFileID    = 0;
 unsigned long lastFileCompletionTime = 0;
+
+// Estadísticas de pipeline RX
+volatile uint32_t packetsSeen               = 0;
+volatile uint32_t packetsQueued             = 0;
+volatile uint32_t packetsProcessed          = 0;
+volatile uint32_t packetsDroppedInvalidLen  = 0;
+volatile uint32_t packetsDroppedQueueFull   = 0;
+volatile uint32_t packetsDroppedCRC         = 0;
+volatile uint32_t packetsDroppedUnknownType = 0;
+volatile uint32_t packetsDroppedBounds      = 0;
+volatile uint32_t packetsDroppedManifest    = 0;
+volatile uint32_t packetsDroppedFileMismatch = 0;
+
+typedef struct {
+  uint8_t mac[6];
+  uint8_t data[ESPNOW_MAX_PACKET_LEN];
+  uint16_t len;
+  bool    ready;
+} PendingRxPacket;
+
+PendingRxPacket rxQueue[ESPNOW_RX_QUEUE_SIZE];
+volatile uint8_t rxQueueHead = 0;
+volatile uint8_t rxQueueTail = 0;
+volatile uint8_t rxQueueCount = 0;
+portMUX_TYPE rxQueueMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Objeto Preferences para persistencia
 Preferences preferences;
@@ -155,6 +185,8 @@ void setESPNowConfig(String jsonStr);
 void sendCurrentESPNowConfig();
 
 void processESPNowPacket(uint8_t *mac, uint8_t *incomingData, int len);
+bool dequeueESPNowPacket(PendingRxPacket &packet);
+void printPacketDropStats(const char *context);
 void handleManifest(uint8_t* data, size_t len);
 void handleDataChunk(uint8_t* data, size_t len);
 void handleParityChunk(uint8_t* data, size_t len);
@@ -190,14 +222,50 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData, int len) {
-  const uint8_t *mac = recv_info->src_addr;
-  // Copiar datos a buffer para procesar en loop
-  if (len > 0 && len <= 250) {
-    packetReceived = true;
-    lastPacketTime = millis();
-    processESPNowPacket((uint8_t*)mac, (uint8_t*)incomingData, len);
-    yield();
+  if (len <= 0 || len > ESPNOW_MAX_PACKET_LEN || recv_info == nullptr || incomingData == nullptr) {
+    portENTER_CRITICAL_ISR(&rxQueueMux);
+    packetsDroppedInvalidLen++;
+    portEXIT_CRITICAL_ISR(&rxQueueMux);
+    return;
   }
+
+  portENTER_CRITICAL_ISR(&rxQueueMux);
+  packetsSeen++;
+  if (rxQueueCount >= ESPNOW_RX_QUEUE_SIZE) {
+    packetsDroppedQueueFull++;
+    portEXIT_CRITICAL_ISR(&rxQueueMux);
+    return;
+  }
+
+  PendingRxPacket &slot = rxQueue[rxQueueHead];
+  memcpy(slot.mac, recv_info->src_addr, sizeof(slot.mac));
+  memcpy(slot.data, incomingData, len);
+  slot.len = (uint16_t)len;
+  slot.ready = true;
+
+  rxQueueHead = (rxQueueHead + 1) % ESPNOW_RX_QUEUE_SIZE;
+  rxQueueCount++;
+  packetsQueued++;
+  portEXIT_CRITICAL_ISR(&rxQueueMux);
+
+  packetReceived = true;
+  lastPacketTime = millis();
+}
+
+bool dequeueESPNowPacket(PendingRxPacket &packet) {
+  portENTER_CRITICAL(&rxQueueMux);
+  if (rxQueueCount == 0) {
+    portEXIT_CRITICAL(&rxQueueMux);
+    return false;
+  }
+
+  PendingRxPacket &slot = rxQueue[rxQueueTail];
+  packet = slot;
+  slot.ready = false;
+  rxQueueTail = (rxQueueTail + 1) % ESPNOW_RX_QUEUE_SIZE;
+  rxQueueCount--;
+  portEXIT_CRITICAL(&rxQueueMux);
+  return true;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -276,6 +344,16 @@ void setup() {
 // ════════════════════════════════════════════════════════════════
 
 void loop() {
+  PendingRxPacket packet;
+  while (dequeueESPNowPacket(packet)) {
+    processESPNowPacket(packet.mac, packet.data, packet.len);
+    packetsProcessed++;
+    yield();
+  }
+  portENTER_CRITICAL(&rxQueueMux);
+  packetReceived = (rxQueueCount > 0);
+  portEXIT_CRITICAL(&rxQueueMux);
+
   // Reconexión BLE
   if (!deviceConnected && oldDeviceConnected) {
     delay(500);
@@ -731,7 +809,12 @@ void sendCurrentESPNowConfig() {
 // ════════════════════════════════════════════════════════════════
 
 void processESPNowPacket(uint8_t *mac, uint8_t *incomingData, int len) {
-  if (len < 8) return;
+  (void)mac;
+  if (len < 8) {
+    packetsDroppedInvalidLen++;
+    Serial.printf("⚠️  Paquete descartado: longitud inválida (%d)\n", len);
+    return;
+  }
 
   // Verificar CRC
   uint16_t crcRecv, crcCalc;
@@ -739,6 +822,8 @@ void processESPNowPacket(uint8_t *mac, uint8_t *incomingData, int len) {
   crcCalc = crc16_ccitt(incomingData, len - 2);
 
   if (crcRecv != crcCalc) {
+    packetsDroppedCRC++;
+    Serial.printf("⚠️  CRC inválido: recv=0x%04X calc=0x%04X len=%d\n", crcRecv, crcCalc, len);
     return;
   }
 
@@ -751,6 +836,10 @@ void processESPNowPacket(uint8_t *mac, uint8_t *incomingData, int len) {
     handleParityChunk(incomingData, len);
   else if (incomingData[0] == FILE_END_MAGIC_1  && incomingData[1] == FILE_END_MAGIC_2)  
     handleFileEnd(incomingData, len);
+  else {
+    packetsDroppedUnknownType++;
+    Serial.printf("⚠️  Tipo de paquete desconocido: 0x%02X 0x%02X\n", incomingData[0], incomingData[1]);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -758,7 +847,11 @@ void processESPNowPacket(uint8_t *mac, uint8_t *incomingData, int len) {
 // ════════════════════════════════════════════════════════════════
 
 void handleManifest(uint8_t* data, size_t len) {
-  if (len < 18) return;
+  if (len < 18) {
+    packetsDroppedManifest++;
+    Serial.printf("⚠️  Manifest descartado: len inválido (%u)\n", (unsigned)len);
+    return;
+  }
 
   uint32_t fileID, fileSize;
   uint16_t totalChunksRx, chunkSize;
@@ -771,7 +864,11 @@ void handleManifest(uint8_t* data, size_t len) {
   memcpy(&chunkSize,     data + idx, 2); idx += 2;
   nameLen = data[idx++];
 
-  if (nameLen == 0 || nameLen > 100 || len < idx + nameLen + 2) return;
+  if (nameLen == 0 || nameLen > 100 || len < idx + nameLen + 2) {
+    packetsDroppedManifest++;
+    Serial.println("⚠️  Manifest descartado: nombre/longitud inválidos");
+    return;
+  }
 
   char fileName[101];
   memcpy(fileName, data + idx, nameLen);
@@ -784,10 +881,31 @@ void handleManifest(uint8_t* data, size_t len) {
 
   if (fileID == lastProcessedFileID &&
       (millis() - lastFileCompletionTime) < FILE_ID_COOLDOWN) {
+    packetsDroppedManifest++;
+    Serial.printf("ℹ️  Manifest ignorado por cooldown (%lums restantes)\n",
+                  FILE_ID_COOLDOWN - (millis() - lastFileCompletionTime));
     return;
   }
 
   if (receivingFile && currentFileID == fileID) {
+    if (totalChunksRx != totalChunks) {
+      packetsDroppedManifest++;
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: chunks %u!=%u\n",
+                    fileID, totalChunksRx, totalChunks);
+      return;
+    }
+    if (chunkSize != receivingChunkSize) {
+      packetsDroppedManifest++;
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: chunkSize %u!=%u\n",
+                    fileID, chunkSize, receivingChunkSize);
+      return;
+    }
+    if (fileSize != receivingFileSize) {
+      packetsDroppedManifest++;
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: fileSize %u!=%u\n",
+                    fileID, fileSize, receivingFileSize);
+      return;
+    }
     if (detectedRound > currentRound) {
       currentRound = detectedRound;
       uint16_t totalNow = 0;
@@ -809,7 +927,13 @@ void handleManifest(uint8_t* data, size_t len) {
 
   if (!receivingFile) {
     if (totalChunksRx == 0 || totalChunksRx > MAX_CHUNKS) {
+      packetsDroppedManifest++;
       Serial.printf("❌ totalChunks inválido: %u (max %u)\n", totalChunksRx, MAX_CHUNKS);
+      return;
+    }
+    if (chunkSize == 0 || chunkSize > CHUNK_SIZE_ESPNOW) {
+      packetsDroppedManifest++;
+      Serial.printf("❌ chunkSize inválido: %u (max %u)\n", chunkSize, CHUNK_SIZE_ESPNOW);
       return;
     }
 
@@ -860,7 +984,10 @@ void handleManifest(uint8_t* data, size_t len) {
 // ════════════════════════════════════════════════════════════════
 
 void handleDataChunk(uint8_t* data, size_t len) {
-  if (len < 13 || !receivingFile) return;
+  if (len < 13 || !receivingFile) {
+    packetsDroppedBounds++;
+    return;
+  }
 
   uint32_t fileID;
   uint16_t chunkIndex, totalChunksRx;
@@ -870,9 +997,30 @@ void handleDataChunk(uint8_t* data, size_t len) {
   memcpy(&chunkIndex,    data + idx, 2); idx += 2;
   memcpy(&totalChunksRx, data + idx, 2); idx += 2;
 
-  if (fileID != currentFileID)          return;
-  if (chunkIndex >= totalChunks)        return;
-  if (chunkIndex >= MAX_CHUNKS)         return;
+  if (fileID != currentFileID) {
+    packetsDroppedFileMismatch++;
+    return;
+  }
+  if (totalChunksRx == 0 || totalChunksRx > MAX_CHUNKS) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk descartado: totalChunks del paquete inválido (%u)\n", totalChunksRx);
+    return;
+  }
+  if (totalChunks == 0 || totalChunks > MAX_CHUNKS) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk descartado: totalChunks interno inválido (%u)\n", totalChunks);
+    return;
+  }
+  if (totalChunksRx != totalChunks) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk descartado: totalChunks mismatch pkt=%u esperado=%u\n", totalChunksRx, totalChunks);
+    return;
+  }
+  if (chunkIndex >= totalChunksRx || chunkIndex >= MAX_CHUNKS) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk fuera de rango: idx=%u total=%u max=%u\n", chunkIndex, totalChunksRx, MAX_CHUNKS);
+    return;
+  }
 
   if (chunkReceived[chunkIndex]) {
     duplicateChunks++;
@@ -881,11 +1029,33 @@ void handleDataChunk(uint8_t* data, size_t len) {
     return;
   }
 
+  if (len <= idx + 2) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk %u descartado: payload vacío\n", chunkIndex);
+    return;
+  }
+
   size_t dataLen = len - idx - 2;
+  if (dataLen == 0 || dataLen > CHUNK_SIZE_ESPNOW) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk %u descartado: dataLen inválido (%u)\n", chunkIndex, (unsigned)dataLen);
+    return;
+  }
 
   uint32_t fileOffset = (uint32_t)chunkIndex * receivingChunkSize;
+  if (fileOffset >= receivingFileSize) {
+    packetsDroppedBounds++;
+    Serial.printf("⚠️  Chunk %u descartado: offset fuera de archivo (%u >= %u)\n",
+                  chunkIndex, fileOffset, receivingFileSize);
+    return;
+  }
   if (fileOffset + dataLen > receivingFileSize) {
     dataLen = receivingFileSize - fileOffset;
+    if (dataLen == 0) {
+      packetsDroppedBounds++;
+      Serial.printf("⚠️  Chunk %u descartado: recorte dejó 0 bytes\n", chunkIndex);
+      return;
+    }
   }
 
   chunkBuffer[chunkIndex] = (uint8_t*)malloc(dataLen);
@@ -1034,6 +1204,28 @@ uint16_t recoverMissingChunks() {
   return recovered;
 }
 
+void printPacketDropStats(const char *context) {
+  uint32_t seen, queued, processed, dropLen, dropQueue, dropCrc, dropType, dropBounds, dropManifest, dropFile;
+  portENTER_CRITICAL(&rxQueueMux);
+  seen = packetsSeen;
+  queued = packetsQueued;
+  processed = packetsProcessed;
+  dropLen = packetsDroppedInvalidLen;
+  dropQueue = packetsDroppedQueueFull;
+  dropCrc = packetsDroppedCRC;
+  dropType = packetsDroppedUnknownType;
+  dropBounds = packetsDroppedBounds;
+  dropManifest = packetsDroppedManifest;
+  dropFile = packetsDroppedFileMismatch;
+  portEXIT_CRITICAL(&rxQueueMux);
+
+  Serial.printf("📈 RX Stats (%s): seen=%lu queued=%lu processed=%lu | drops[len=%lu queue=%lu crc=%lu type=%lu bounds=%lu manifest=%lu file=%lu]\n",
+                context,
+                (unsigned long)seen, (unsigned long)queued, (unsigned long)processed,
+                (unsigned long)dropLen, (unsigned long)dropQueue, (unsigned long)dropCrc,
+                (unsigned long)dropType, (unsigned long)dropBounds, (unsigned long)dropManifest, (unsigned long)dropFile);
+}
+
 // ════════════════════════════════════════════════════════════════
 // 📝 ENSAMBLAR ARCHIVO
 // ════════════════════════════════════════════════════════════════
@@ -1130,6 +1322,7 @@ void assembleFile() {
   }
   Serial.printf("⏱️  %.2f s | ⚡ %.2f kbps\n", receptionTime, speed);
   Serial.println("═══════════════════════════════════════\n");
+  printPacketDropStats("RX_COMPLETE");
 
   String cleanName = receivingFileName;
   if (cleanName.startsWith("/")) cleanName = cleanName.substring(1);
@@ -1156,6 +1349,7 @@ void assembleFile() {
 
 void cancelReception(String reason) {
   Serial.println("❌ Cancelando recepción: " + reason);
+  printPacketDropStats("RX_FAILED");
   sendResponse("RX_FAILED:" + reason);
   sendProgress(0);
   resetReceptionBuffers();
