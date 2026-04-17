@@ -42,8 +42,11 @@
 #define MAX_RETRIES       3
 #define FEC_BLOCK_SIZE    8
 #define MANIFEST_REPEAT   5
-#define REPEAT_COUNT      3
-#define FILE_END_REPEAT   3
+#define REPEAT_COUNT      3   // Reenviar archivo completo N veces para datacasting 1→N
+#define FILE_END_REPEAT   3   // Repeticiones de FILE_END por cada vuelta
+#define ROUND_DELAY_STEP_MS 2
+#define STAGGER_INTERVAL  7
+#define STAGGER_DELAY_MS  2
 
 #define ENABLE_INTERLEAVING false
 
@@ -1069,7 +1072,8 @@ bool sendFileViaESPNow(const char* path) {
     uint16_t roundManifestOk = 0;
     uint16_t roundFileEndOk = 0;
     uint16_t lastProgressPercent = 0;
-    int roundDelay = dynamicDelay + (round - 1) * 2;
+    // Aumentar delay por vuelta reduce colisiones cuando varios RX reciben el mismo broadcast.
+    int roundDelay = dynamicDelay + (round - 1) * ROUND_DELAY_STEP_MS;
 
     Serial.printf("\n🔁 Vuelta %d/%d (delay base %dms)\n", round, REPEAT_COUNT, roundDelay);
     Serial.printf("📤 Enviando MANIFEST (%d repeticiones)...\n", MANIFEST_REPEAT);
@@ -1147,7 +1151,7 @@ bool sendFileViaESPNow(const char* path) {
         delay(roundDelay + 1);
       }
 
-      int staggerDelay = roundDelay + ((i % 7) == 0 ? 2 : 0);
+      int staggerDelay = roundDelay + ((i % STAGGER_INTERVAL) == 0 ? STAGGER_DELAY_MS : 0);
       delay(staggerDelay);
       yield();
     }

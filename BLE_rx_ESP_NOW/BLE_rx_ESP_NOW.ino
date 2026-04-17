@@ -42,7 +42,8 @@
 #define FEC_BLOCK_SIZE  8
 #define MANIFEST_REPEAT 5
 #define REPEAT_COUNT    3
-#define MAX_TOLERABLE_GAPS 2
+#define MAX_FEC_PASSES  3
+#define MAX_TOLERABLE_GAPS 2  // Permite ensamblar con pocos gaps rellenados en cero (tradeoff calidad/completitud)
 
 // Magic bytes
 #define MANIFEST_MAGIC_1  0xAA
@@ -969,7 +970,7 @@ uint16_t recoverMissingChunks() {
   bool progress = true;
   uint8_t pass = 0;
 
-  while (progress && pass < 3) {
+  while (progress && pass < MAX_FEC_PASSES) {
     progress = false;
     pass++;
     for (uint16_t block = 0; block < numBlocks; block++) {
@@ -1056,6 +1057,7 @@ void assembleFile() {
 
   if (missingChunks > 0 && missingChunks <= MAX_TOLERABLE_GAPS) {
     Serial.printf("⚠️  Tolerando %u gap(s) y rellenando con ceros...\n", missingChunks);
+    uint16_t gapFillFailures = 0;
     for (uint16_t i = 0; i < totalChunks; i++) {
       if (chunkReceived[i]) continue;
 
@@ -1071,7 +1073,13 @@ void assembleFile() {
       if (chunkBuffer[i] != nullptr) {
         chunkLengths[i] = expectedLen;
         chunkReceived[i] = true;
+      } else {
+        gapFillFailures++;
       }
+    }
+    if (gapFillFailures > 0) {
+      cancelReception("GAP_FILL_ALLOC_FAILED:" + String(gapFillFailures));
+      return;
     }
     missingChunks = 0;
   } else if (missingChunks > 0) {
