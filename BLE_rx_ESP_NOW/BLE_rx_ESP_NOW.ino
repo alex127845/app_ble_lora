@@ -35,11 +35,14 @@
 
 #define CHUNK_SIZE_BLE    200
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
-#define RX_TIMEOUT        60000
+#define RX_TIMEOUT        120000
 
 #define MAX_CHUNKS      4096
 
 #define FEC_BLOCK_SIZE  8
+#define MANIFEST_REPEAT 5
+#define REPEAT_COUNT    3
+#define MAX_TOLERABLE_GAPS 2
 
 // Magic bytes
 #define MANIFEST_MAGIC_1  0xAA
@@ -86,6 +89,9 @@ uint16_t receivedDataChunks   = 0;
 uint16_t receivedParityChunks = 0;
 uint16_t manifestCount        = 0;
 uint16_t duplicateChunks      = 0;
+uint8_t  currentRound         = 1;
+uint16_t chunksByRound[REPEAT_COUNT]     = {0};
+uint16_t duplicatesByRound[REPEAT_COUNT] = {0};
 int16_t  avgRSSI              = 0;
 float    avgSNR               = 0;
 int      rssiCount            = 0;
@@ -153,7 +159,7 @@ void handleDataChunk(uint8_t* data, size_t len);
 void handleParityChunk(uint8_t* data, size_t len);
 void handleFileEnd(uint8_t* data, size_t len);
 void assembleFile();
-void recoverMissingChunks();
+uint16_t recoverMissingChunks();
 void cancelReception(String reason);
 void resetReceptionBuffers();
 
@@ -771,6 +777,9 @@ void handleManifest(uint8_t* data, size_t len) {
   fileName[nameLen] = '\0';
 
   manifestCount++;
+  uint8_t detectedRound = (uint8_t)(((manifestCount - 1) / MANIFEST_REPEAT) + 1);
+  if (detectedRound < 1) detectedRound = 1;
+  if (detectedRound > REPEAT_COUNT) detectedRound = REPEAT_COUNT;
 
   if (fileID == lastProcessedFileID &&
       (millis() - lastFileCompletionTime) < FILE_ID_COOLDOWN) {
@@ -778,7 +787,16 @@ void handleManifest(uint8_t* data, size_t len) {
   }
 
   if (receivingFile && currentFileID == fileID) {
-    Serial.printf("🔁 Manifest duplicado (vuelta %u)\n", manifestCount);
+    if (detectedRound > currentRound) {
+      currentRound = detectedRound;
+      uint16_t totalNow = 0;
+      for (int r = 0; r < REPEAT_COUNT; r++) totalNow += chunksByRound[r];
+      float completeness = (totalChunks > 0) ? (totalNow * 100.0f / totalChunks) : 0.0f;
+      Serial.printf("🔁 Nueva vuelta detectada: %u/%u | Completitud acumulada: %.1f%%\n",
+                    currentRound, REPEAT_COUNT, completeness);
+    } else {
+      Serial.printf("🔁 Manifest duplicado (vuelta %u)\n", currentRound);
+    }
     return;
   }
 
@@ -810,12 +828,17 @@ void handleManifest(uint8_t* data, size_t len) {
     receivingFile        = true;
     receptionStartTime   = millis();
 
+    resetReceptionBuffers();
+
     receivedDataChunks   = 0;
     receivedParityChunks = 0;
     duplicateChunks      = 0;
+    currentRound         = detectedRound;
+    for (int r = 0; r < REPEAT_COUNT; r++) {
+      chunksByRound[r] = 0;
+      duplicatesByRound[r] = 0;
+    }
     rssiCount            = 0;
-
-    resetReceptionBuffers();
 
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.printf("║  🆔 File ID:  0x%08X\n",             fileID);
@@ -852,6 +875,8 @@ void handleDataChunk(uint8_t* data, size_t len) {
 
   if (chunkReceived[chunkIndex]) {
     duplicateChunks++;
+    uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
+    duplicatesByRound[roundIdx]++;
     return;
   }
 
@@ -868,6 +893,8 @@ void handleDataChunk(uint8_t* data, size_t len) {
     chunkLengths[chunkIndex]  = dataLen;
     chunkReceived[chunkIndex] = true;
     receivedDataChunks++;
+    uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
+    chunksByRound[roundIdx]++;
 
     static uint16_t lastPct = 0;
     uint16_t pct = (receivedDataChunks * 100) / totalChunks;
@@ -934,64 +961,76 @@ void handleFileEnd(uint8_t* data, size_t len) {
 // 🔧 FEC RECOVERY
 // ════════════════════════════════════════════════════════════════
 
-void recoverMissingChunks() {
+uint16_t recoverMissingChunks() {
   Serial.println("\n🔧 FEC Recovery...");
   uint16_t recovered = 0;
 
   uint16_t numBlocks = (totalChunks + FEC_BLOCK_SIZE - 1) / FEC_BLOCK_SIZE;
+  bool progress = true;
+  uint8_t pass = 0;
 
-  for (uint16_t block = 0; block < numBlocks; block++) {
-    if (!parityReceived[block]) continue;
+  while (progress && pass < 3) {
+    progress = false;
+    pass++;
+    for (uint16_t block = 0; block < numBlocks; block++) {
+      if (!parityReceived[block]) continue;
 
-    uint16_t baseIdx = block * FEC_BLOCK_SIZE;
-    int      missing      = -1;
-    int      missingCount = 0;
+      uint16_t baseIdx = block * FEC_BLOCK_SIZE;
+      int      missing      = -1;
+      int      missingCount = 0;
 
-    for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
-      if (!chunkReceived[baseIdx + i]) {
-        missing = i;
-        missingCount++;
+      for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
+        if (!chunkReceived[baseIdx + i]) {
+          missing = i;
+          missingCount++;
+        }
       }
-    }
 
-    if (missingCount != 1) continue;
+      if (missingCount != 1) continue;
 
-    uint16_t missingIdx = baseIdx + missing;
-    size_t   maxLen     = parityLengths[block];
+      uint16_t missingIdx = baseIdx + missing;
+      size_t   maxLen     = parityLengths[block];
 
-    chunkBuffer[missingIdx] = (uint8_t*)malloc(maxLen);
-    if (!chunkBuffer[missingIdx]) continue;
-
-    memcpy(chunkBuffer[missingIdx], parityBuffer[block], maxLen);
-
-    for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
-      if (i == missing) continue;
-      if (!chunkReceived[baseIdx + i]) continue;
-
-      size_t xorLen = min(maxLen, (size_t)chunkLengths[baseIdx + i]);
-      for (size_t k = 0; k < xorLen; k++)
-        chunkBuffer[missingIdx][k] ^= chunkBuffer[baseIdx + i][k];
-    }
-
-    size_t recoveredLen = maxLen;
-    if (missingIdx == (totalChunks - 1)) {
-      size_t lastChunkOffset = (size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW;
-      if (receivingFileSize > lastChunkOffset) {
-        size_t expectedLastLen = receivingFileSize - lastChunkOffset;
-        recoveredLen = min(recoveredLen, expectedLastLen);
+      if (chunkBuffer[missingIdx] != nullptr) {
+        free(chunkBuffer[missingIdx]);
+        chunkBuffer[missingIdx] = nullptr;
       }
+      chunkBuffer[missingIdx] = (uint8_t*)malloc(maxLen);
+      if (!chunkBuffer[missingIdx]) continue;
+
+      memcpy(chunkBuffer[missingIdx], parityBuffer[block], maxLen);
+
+      for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
+        if (i == missing) continue;
+        if (!chunkReceived[baseIdx + i]) continue;
+
+        size_t xorLen = min(maxLen, (size_t)chunkLengths[baseIdx + i]);
+        for (size_t k = 0; k < xorLen; k++)
+          chunkBuffer[missingIdx][k] ^= chunkBuffer[baseIdx + i][k];
+      }
+
+      size_t recoveredLen = maxLen;
+      if (missingIdx == (totalChunks - 1)) {
+        size_t lastChunkOffset = (size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW;
+        if (receivingFileSize > lastChunkOffset) {
+          size_t expectedLastLen = receivingFileSize - lastChunkOffset;
+          recoveredLen = min(recoveredLen, expectedLastLen);
+        }
+      }
+
+      chunkLengths[missingIdx]  = recoveredLen;
+      chunkReceived[missingIdx] = true;
+      receivedDataChunks++;
+      recovered++;
+      progress = true;
+
+      Serial.printf("✅ Chunk %u recuperado (bloque FEC %u, pasada %u)\n", missingIdx, block, pass);
     }
-
-    chunkLengths[missingIdx]  = recoveredLen;
-    chunkReceived[missingIdx] = true;
-    receivedDataChunks++;
-    recovered++;
-
-    Serial.printf("✅ Chunk %u recuperado (bloque FEC %u)\n", missingIdx, block);
   }
 
   if (recovered > 0) Serial.printf("🎉 %u chunk(s) recuperados con FEC\n", recovered);
   else               Serial.println("ℹ️  Sin chunks recuperables por FEC");
+  return recovered;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1004,7 +1043,7 @@ void assembleFile() {
   Serial.println("\n═══════════════════════════════════════");
   Serial.println("📝 Ensamblando archivo...");
 
-  recoverMissingChunks();
+  uint16_t recoveredThisAssemble = recoverMissingChunks();
 
   uint16_t missingChunks = 0;
   for (uint16_t i = 0; i < totalChunks; i++)
@@ -1015,7 +1054,27 @@ void assembleFile() {
                 missingChunks, (missingChunks * 100.0) / totalChunks,
                 receivedParityChunks, duplicateChunks);
 
-  if (missingChunks > 0) {
+  if (missingChunks > 0 && missingChunks <= MAX_TOLERABLE_GAPS) {
+    Serial.printf("⚠️  Tolerando %u gap(s) y rellenando con ceros...\n", missingChunks);
+    for (uint16_t i = 0; i < totalChunks; i++) {
+      if (chunkReceived[i]) continue;
+
+      size_t expectedLen = receivingChunkSize;
+      if (i == (totalChunks - 1)) {
+        size_t lastChunkOffset = (size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW;
+        if (receivingFileSize > lastChunkOffset) {
+          expectedLen = receivingFileSize - lastChunkOffset;
+        }
+      }
+
+      chunkBuffer[i] = (uint8_t*)calloc(expectedLen, 1);
+      if (chunkBuffer[i] != nullptr) {
+        chunkLengths[i] = expectedLen;
+        chunkReceived[i] = true;
+      }
+    }
+    missingChunks = 0;
+  } else if (missingChunks > 0) {
     cancelReception("MISSING_CHUNKS_AFTER_FEC:" + String(missingChunks));
     return;
   }
@@ -1054,6 +1113,11 @@ void assembleFile() {
   Serial.printf("📄 %s\n",               receivingFileName.c_str());
   Serial.printf("📊 %u / %u bytes\n",    writtenBytes, receivingFileSize);
   Serial.printf("📈 Completitud: %.1f%%\n", completeness);
+  Serial.printf("🔧 Recuperados por FEC (ensamble actual): %u\n", recoveredThisAssemble);
+  for (int r = 0; r < REPEAT_COUNT; r++) {
+    Serial.printf("🔁 Vuelta %d: nuevos=%u, duplicados=%u\n",
+                  r + 1, chunksByRound[r], duplicatesByRound[r]);
+  }
   Serial.printf("⏱️  %.2f s | ⚡ %.2f kbps\n", receptionTime, speed);
   Serial.println("═══════════════════════════════════════\n");
 
@@ -1117,6 +1181,11 @@ void resetReceptionBuffers() {
   receivedParityChunks = 0;
   manifestCount        = 0;
   duplicateChunks      = 0;
+  currentRound         = 1;
+  for (int r = 0; r < REPEAT_COUNT; r++) {
+    chunksByRound[r] = 0;
+    duplicatesByRound[r] = 0;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
