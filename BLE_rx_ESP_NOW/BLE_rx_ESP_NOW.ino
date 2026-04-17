@@ -1056,6 +1056,8 @@ void assembleFile() {
                 receivedParityChunks, duplicateChunks);
 
   if (missingChunks > 0 && missingChunks <= MAX_TOLERABLE_GAPS) {
+    // Tradeoff explícito: para datacasting broadcast preferimos completitud del archivo
+    // con pocos gaps rellenados en cero, en lugar de descartar toda la transferencia.
     Serial.printf("⚠️  Tolerando %u gap(s) y rellenando con ceros...\n", missingChunks);
     uint16_t gapFillFailures = 0;
     for (uint16_t i = 0; i < totalChunks; i++) {
@@ -1078,7 +1080,7 @@ void assembleFile() {
       }
     }
     if (gapFillFailures > 0) {
-      cancelReception("GAP_FILL_ALLOC_FAILED:" + String(gapFillFailures));
+      cancelReception("MEMORY_ALLOCATION_FAILED_DURING_GAP_FILL:" + String(gapFillFailures));
       return;
     }
     missingChunks = 0;

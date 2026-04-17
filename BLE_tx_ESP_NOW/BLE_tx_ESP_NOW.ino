@@ -1073,15 +1073,15 @@ bool sendFileViaESPNow(const char* path) {
     uint16_t roundFileEndOk = 0;
     uint16_t lastProgressPercent = 0;
     // Aumentar delay por vuelta reduce colisiones cuando varios RX reciben el mismo broadcast.
-    int roundDelay = dynamicDelay + (round - 1) * ROUND_DELAY_STEP_MS;
+    int currentRoundDelay = dynamicDelay + (round - 1) * ROUND_DELAY_STEP_MS;
 
-    Serial.printf("\n🔁 Vuelta %d/%d (delay base %dms)\n", round, REPEAT_COUNT, roundDelay);
+    Serial.printf("\n🔁 Vuelta %d/%d (delay base %dms)\n", round, REPEAT_COUNT, currentRoundDelay);
     Serial.printf("📤 Enviando MANIFEST (%d repeticiones)...\n", MANIFEST_REPEAT);
     for (int m = 0; m < MANIFEST_REPEAT; m++) {
       if (sendManifest(currentFileID, totalSize, totalChunks, fileName)) {
         roundManifestOk++;
       }
-      delay(roundDelay + 10);
+      delay(currentRoundDelay + 10);
       yield();
     }
     Serial.printf("✅ MANIFEST enviados: %u/%u\n", roundManifestOk, MANIFEST_REPEAT);
@@ -1148,10 +1148,10 @@ bool sendFileViaESPNow(const char* path) {
         }
 
         fecIndex = 0;
-        delay(roundDelay + 1);
+        delay(currentRoundDelay + 1);
       }
 
-      int staggerDelay = roundDelay + ((i % STAGGER_INTERVAL) == 0 ? STAGGER_DELAY_MS : 0);
+      int staggerDelay = currentRoundDelay + ((i % STAGGER_INTERVAL) == 0 ? STAGGER_DELAY_MS : 0);
       delay(staggerDelay);
       yield();
     }
@@ -1159,7 +1159,7 @@ bool sendFileViaESPNow(const char* path) {
     Serial.printf("🏁 Enviando FILE_END (%d repeticiones)...\n", FILE_END_REPEAT);
     for (int e = 0; e < FILE_END_REPEAT; e++) {
       if (sendFileEnd(currentFileID, totalChunks)) roundFileEndOk++;
-      delay(roundDelay + 14);
+      delay(currentRoundDelay + 14);
       yield();
     }
 
