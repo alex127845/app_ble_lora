@@ -120,7 +120,7 @@ volatile uint32_t packetsDroppedFileMismatch = 0;
 typedef struct {
   uint8_t mac[6];
   uint8_t data[ESPNOW_MAX_PACKET_LEN];
-  uint8_t len;
+  uint16_t len;
   bool    ready;
 } PendingRxPacket;
 
@@ -237,7 +237,7 @@ void OnDataRecv(const esp_now_recv_info *recv_info, const uint8_t *incomingData,
   PendingRxPacket &slot = rxQueue[rxQueueHead];
   memcpy(slot.mac, recv_info->src_addr, sizeof(slot.mac));
   memcpy(slot.data, incomingData, len);
-  slot.len = (uint8_t)len;
+  slot.len = (uint16_t)len;
   slot.ready = true;
 
   rxQueueHead = (rxQueueHead + 1) % ESPNOW_RX_QUEUE_SIZE;
@@ -345,9 +345,9 @@ void loop() {
   while (dequeueESPNowPacket(packet)) {
     processESPNowPacket(packet.mac, packet.data, packet.len);
     packetsProcessed++;
-    packetReceived = (rxQueueCount > 0);
     yield();
   }
+  packetReceived = false;
 
   // Reconexión BLE
   if (!deviceConnected && oldDeviceConnected) {
@@ -883,10 +883,22 @@ void handleManifest(uint8_t* data, size_t len) {
   }
 
   if (receivingFile && currentFileID == fileID) {
-    if (totalChunksRx != totalChunks || chunkSize != receivingChunkSize || fileSize != receivingFileSize) {
+    if (totalChunksRx != totalChunks) {
       packetsDroppedManifest++;
-      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X (chunks %u!=%u, chunkSize %u!=%u, fileSize %u!=%u)\n",
-                    fileID, totalChunksRx, totalChunks, chunkSize, receivingChunkSize, fileSize, receivingFileSize);
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: chunks %u!=%u\n",
+                    fileID, totalChunksRx, totalChunks);
+      return;
+    }
+    if (chunkSize != receivingChunkSize) {
+      packetsDroppedManifest++;
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: chunkSize %u!=%u\n",
+                    fileID, chunkSize, receivingChunkSize);
+      return;
+    }
+    if (fileSize != receivingFileSize) {
+      packetsDroppedManifest++;
+      Serial.printf("⚠️  Manifest inconsistente para FileID 0x%08X: fileSize %u!=%u\n",
+                    fileID, fileSize, receivingFileSize);
       return;
     }
     if (detectedRound > currentRound) {
@@ -1036,10 +1048,6 @@ void handleDataChunk(uint8_t* data, size_t len) {
     }
   }
 
-  if (chunkBuffer[chunkIndex] != nullptr) {
-    free(chunkBuffer[chunkIndex]);
-    chunkBuffer[chunkIndex] = nullptr;
-  }
   chunkBuffer[chunkIndex] = (uint8_t*)malloc(dataLen);
   if (chunkBuffer[chunkIndex] != nullptr) {
     memcpy(chunkBuffer[chunkIndex], data + idx, dataLen);
@@ -1187,11 +1195,25 @@ uint16_t recoverMissingChunks() {
 }
 
 void printPacketDropStats(const char *context) {
+  uint32_t seen, queued, processed, dropLen, dropQueue, dropCrc, dropType, dropBounds, dropManifest, dropFile;
+  portENTER_CRITICAL(&rxQueueMux);
+  seen = packetsSeen;
+  queued = packetsQueued;
+  processed = packetsProcessed;
+  dropLen = packetsDroppedInvalidLen;
+  dropQueue = packetsDroppedQueueFull;
+  dropCrc = packetsDroppedCRC;
+  dropType = packetsDroppedUnknownType;
+  dropBounds = packetsDroppedBounds;
+  dropManifest = packetsDroppedManifest;
+  dropFile = packetsDroppedFileMismatch;
+  portEXIT_CRITICAL(&rxQueueMux);
+
   Serial.printf("📈 RX Stats (%s): seen=%lu queued=%lu processed=%lu | drops[len=%lu queue=%lu crc=%lu type=%lu bounds=%lu manifest=%lu file=%lu]\n",
                 context,
-                (unsigned long)packetsSeen, (unsigned long)packetsQueued, (unsigned long)packetsProcessed,
-                (unsigned long)packetsDroppedInvalidLen, (unsigned long)packetsDroppedQueueFull, (unsigned long)packetsDroppedCRC,
-                (unsigned long)packetsDroppedUnknownType, (unsigned long)packetsDroppedBounds, (unsigned long)packetsDroppedManifest, (unsigned long)packetsDroppedFileMismatch);
+                (unsigned long)seen, (unsigned long)queued, (unsigned long)processed,
+                (unsigned long)dropLen, (unsigned long)dropQueue, (unsigned long)dropCrc,
+                (unsigned long)dropType, (unsigned long)dropBounds, (unsigned long)dropManifest, (unsigned long)dropFile);
 }
 
 // ════════════════════════════════════════════════════════════════
