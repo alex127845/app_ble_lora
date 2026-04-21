@@ -16,7 +16,7 @@
 // 🔧 CONFIGURACIÓN - ESP32 V3
 // ════════════════════════════════════════════════════════════════
 
-#define VEXT 36
+#define VEXT 3
 #define VEXT_ON LOW
 
 // ════════════════════════════════════════════════════════════════
@@ -43,7 +43,7 @@
 #define FEC_BLOCK_SIZE    8
 #define MANIFEST_REPEAT   5
 #define REPEAT_COUNT      3   // Reenviar archivo completo N veces para datacasting 1→N
-#define FILE_END_REPEAT   3   // Repeticiones de FILE_END por cada vuelta
+#define FILE_END_REPEAT   5   // Repeticiones de FILE_END por cada vuelta
 #define ROUND_DELAY_STEP_MS 2
 #define STAGGER_INTERVAL  7
 #define STAGGER_DELAY_MS  2

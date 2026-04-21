@@ -16,7 +16,7 @@
 // 🔧 CONFIGURACIÓN - ESP32 V3
 // ═════���══════════════════════════════════════════════════════════
 
-#define VEXT      36
+#define VEXT      3
 #define VEXT_ON   LOW
 
 // ════════════════════════════════════════════════════════════════
@@ -37,7 +37,7 @@
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
 #define RX_TIMEOUT        120000
 #define ESPNOW_MAX_PACKET_LEN 250
-#define ESPNOW_RX_QUEUE_SIZE  8
+#define ESPNOW_RX_QUEUE_SIZE  24
 
 #define MAX_CHUNKS      4096
 
@@ -88,6 +88,8 @@ bool*      parityReceived = nullptr;
 uint16_t*  parityLengths  = nullptr;
 
 // Estadísticas de recepción
+uint16_t lastProgressPct = 0;
+
 uint16_t receivedDataChunks   = 0;
 uint16_t receivedParityChunks = 0;
 uint16_t manifestCount        = 0;
@@ -514,6 +516,7 @@ void setupESPNow() {
 
   // Registrar callback de recepción
   esp_now_register_recv_cb(OnDataRecv);
+  esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE); // canal inicial antes de loadESPNowConfig
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1067,15 +1070,15 @@ void handleDataChunk(uint8_t* data, size_t len) {
     uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
     chunksByRound[roundIdx]++;
 
-    static uint16_t lastPct = 0;
+    //static uint16_t lastPct = 0;
     uint16_t pct = (receivedDataChunks * 100) / totalChunks;
-    if (pct >= lastPct + 5 || receivedDataChunks == totalChunks) {
+    if (pct >= lastProgressPct + 5 || receivedDataChunks == totalChunks) {
       Serial.printf("📦 %u/%u (%.1f%%) | Dupes: %u\n",
                     receivedDataChunks, totalChunks,
                     (float)receivedDataChunks * 100.0 / totalChunks,
                     duplicateChunks);
       sendProgress((uint8_t)pct);
-      lastPct = pct;
+      lastProgressPct = pct;
     }
   } else {
     Serial.printf("❌ malloc falló para chunk %u\n", chunkIndex);
@@ -1124,7 +1127,7 @@ void handleFileEnd(uint8_t* data, size_t len) {
   if (fileID != currentFileID) return;
 
   Serial.println("\n🏁 FILE_END recibido");
-  delay(500);
+  //delay(500);
   assembleFile();
 }
 
@@ -1390,6 +1393,7 @@ void resetReceptionBuffers() {
     chunksByRound[r] = 0;
     duplicatesByRound[r] = 0;
   }
+  lastProgressPct = 0;
 }
 
 // ════════════════════════════════════════════════════════════════
