@@ -36,7 +36,7 @@
 #define CHUNK_SIZE_BLE    200
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
 #define RX_TIMEOUT        120000
-#define ESPNOW_MAX_PACKET_LEN 250
+#define ESPNOW_MAX_PACKET_LEN 255
 #define ESPNOW_RX_QUEUE_SIZE  24
 
 #define MAX_CHUNKS      4096
@@ -374,7 +374,7 @@ void loop() {
   }
 
   yield();
-  delay(10);
+  delay(1);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1072,13 +1072,16 @@ void handleDataChunk(uint8_t* data, size_t len) {
 
     //static uint16_t lastPct = 0;
     uint16_t pct = (receivedDataChunks * 100) / totalChunks;
-    if (pct >= lastProgressPct + 5 || receivedDataChunks == totalChunks) {
+    static unsigned long lastProgressTime = 0;
+    if ((pct >= lastProgressPct + 5 || receivedDataChunks == totalChunks)
+         && (millis() - lastProgressTime > 200)) {
       Serial.printf("📦 %u/%u (%.1f%%) | Dupes: %u\n",
                     receivedDataChunks, totalChunks,
                     (float)receivedDataChunks * 100.0 / totalChunks,
                     duplicateChunks);
       sendProgress((uint8_t)pct);
       lastProgressPct = pct;
+      lastProgressTime = millis();
     }
   } else {
     Serial.printf("❌ malloc falló para chunk %u\n", chunkIndex);
