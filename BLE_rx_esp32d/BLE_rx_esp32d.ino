@@ -22,7 +22,7 @@
 
 // ════════════════════════════════════════════════════════════════
 // 🔧 CONFIGURACIÓN BLE
-// ════════════════════════════════════════════════════════════════
+// ══���═════════════════════════════════════════════════════════════
 
 #define DEVICE_NAME    "ESP32-WROOM-RX-Broadcast-ESPNOW"
 #define SERVICE_UUID   "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -330,18 +330,18 @@ void setup() {
   setupLittleFS();
   setupESPNowBuffers();  // ⭐ Antes de todo
   
-  // ⭐ CONFIGURAR WIFI FIRST (sin BLE)
+  setupBLE();           // BLE PRIMERO
+  delay(1000);
+  
+  // ⭐ CONFIGURAR WIFI DESPUÉS DE BLE
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(200);
-  esp_wifi_set_ps(WIFI_PS_NONE);  // ⭐ MOVER AQUÍ
+  esp_wifi_set_ps(WIFI_PS_NONE);
   delay(200);
   
-  setupESPNow();        // Ahora sí, con WiFi configurado
+  setupESPNow();        // ESP-NOW DESPUÉS
   delay(500);
-  
-  setupBLE();           // BLE después
-  delay(1000);
 
   // Cargar configuración guardada
   loadESPNowConfig();
@@ -810,7 +810,7 @@ void sendCurrentESPNowConfig() {
   Serial.println("✅ Config ESP-NOW enviada: " + json);
 }
 
-// ═════════════════════════════════════════════════��══════════════
+// ════════════════════════════════════════════════════════════════
 // 📡 ESP-NOW RX - PROCESAR PAQUETE
 // ════════════════════════════════════════════════════════════════
 
