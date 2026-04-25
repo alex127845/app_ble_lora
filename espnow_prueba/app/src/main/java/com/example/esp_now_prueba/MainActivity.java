@@ -408,8 +408,8 @@ public class MainActivity extends AppCompatActivity {
                 deviceName = device.getName();
             }
 
-            // Filtrar solo dispositivos Heltec
-            if (deviceName != null && deviceName.contains("Heltec")) {
+            // Filtrar dispositivos Heltec o ESP32-WROOM
+            if (deviceName != null && (deviceName.contains("Heltec") || deviceName.contains("ESPNOW") || deviceName.contains("ESP32"))) {
                 // Evitar duplicados
                 if (!deviceList.contains(device)) {
                     Log.d(TAG, "✨ Dispositivo encontrado: " + deviceName +
