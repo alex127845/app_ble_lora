@@ -38,7 +38,7 @@
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
 #define RX_TIMEOUT        120000
 #define ESPNOW_MAX_PACKET_LEN 255
-#define ESPNOW_RX_QUEUE_SIZE  24
+#define ESPNOW_RX_QUEUE_SIZE  64  // ⭐ AUMENTADO de 24 a 64 para mejor recepción
 
 #define MAX_CHUNKS      4096
 
@@ -320,20 +320,21 @@ void setup() {
   delay(2000);
 
   Serial.println("\n════════════════════════════════════════════════════════");
-  Serial.println("  📡 File Transfer System v5.0 RX BROADCAST");
+  Serial.println("  📡 File Transfer System v5.1 RX BROADCAST");
   Serial.println("  ESP32-WROOM-32D");
   Serial.println("  MODO: RECEPTOR BROADCAST ESP-NOW");
+  Serial.println("  ✅ OPTIMIZADO PARA MEJOR RECEPCIÓN");
   Serial.println("  ✅ CON PERSISTENCIA DE CONFIGURACIÓN");
   Serial.println("════════════════════════════════════════════════════════\n");
 
   setupLittleFS();
 
-  // Inicializar buffers en heap ANTES de BLE y ESP-NOW
-  setupESPNowBuffers();
-
-  setupBLE();
+  // 🔄 CAMBIAR ORDEN: ESP-NOW PRIMERO, BLE DESPUÉS
+  setupESPNow();        // ⭐ PRIMERO (inicializa WiFi)
+  delay(500);
+  
+  setupBLE();           // ⭐ SEGUNDO
   delay(1000);
-  setupESPNow();
 
   // Cargar configuración guardada
   loadESPNowConfig();
@@ -495,13 +496,13 @@ void setupBLE() {
 void setupESPNow() {
   Serial.println("\n📡 Inicializando ESP-NOW...");
 
-  // ⚠️ NO LLAMAR enableVext() en ESP32-WROOM-32D
-  // enableVext(true);
-  // delay(200);
-
-  // Inicializar Wi-Fi en modo STA
+  // 🔥 CRÍTICO: Inicializar WiFi ANTES que ESP-NOW
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  delay(200);
+
+  // ⭐ Desactivar power saving ANTES de esp_now_init
+  esp_wifi_set_ps(WIFI_PS_NONE);
   delay(100);
 
   // Inicializar ESP-NOW
@@ -515,7 +516,10 @@ void setupESPNow() {
 
   // Registrar callback de recepción
   esp_now_register_recv_cb(OnDataRecv);
-  esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE); // canal inicial antes de loadESPNowConfig
+  
+  // Configurar canal después de todo
+  esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+  delay(100);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -806,7 +810,7 @@ void sendCurrentESPNowConfig() {
   Serial.println("✅ Config ESP-NOW enviada: " + json);
 }
 
-// ════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════��══════════════
 // 📡 ESP-NOW RX - PROCESAR PAQUETE
 // ════════════════════════════════════════════════════════════════
 
