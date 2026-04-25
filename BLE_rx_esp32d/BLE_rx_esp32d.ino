@@ -328,12 +328,19 @@ void setup() {
   Serial.println("════════════════════════════════════════════════════════\n");
 
   setupLittleFS();
-
-  // 🔄 CAMBIAR ORDEN: ESP-NOW PRIMERO, BLE DESPUÉS
-  setupESPNow();        // ⭐ PRIMERO (inicializa WiFi)
+  setupESPNowBuffers();  // ⭐ Antes de todo
+  
+  // ⭐ CONFIGURAR WIFI FIRST (sin BLE)
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(200);
+  esp_wifi_set_ps(WIFI_PS_NONE);  // ⭐ MOVER AQUÍ
+  delay(200);
+  
+  setupESPNow();        // Ahora sí, con WiFi configurado
   delay(500);
   
-  setupBLE();           // ⭐ SEGUNDO
+  setupBLE();           // BLE después
   delay(1000);
 
   // Cargar configuración guardada
@@ -496,16 +503,9 @@ void setupBLE() {
 void setupESPNow() {
   Serial.println("\n📡 Inicializando ESP-NOW...");
 
-  // 🔥 CRÍTICO: Inicializar WiFi ANTES que ESP-NOW
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(200);
+  // WiFi ya está configurado en setup()
+  // Solo registrar callback
 
-  // ⭐ Desactivar power saving ANTES de esp_now_init
-  esp_wifi_set_ps(WIFI_PS_NONE);
-  delay(100);
-
-  // Inicializar ESP-NOW
   if (esp_now_init() != ESP_OK) {
     Serial.println("❌ Error inicializando ESP-NOW");
     Serial.println("⚠️ Continuando sin ESP-NOW...");
@@ -513,11 +513,11 @@ void setupESPNow() {
   }
 
   Serial.println("✅ ESP-NOW inicializado");
-
+  
   // Registrar callback de recepción
   esp_now_register_recv_cb(OnDataRecv);
   
-  // Configurar canal después de todo
+  // Configurar canal
   esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
   delay(100);
 }
