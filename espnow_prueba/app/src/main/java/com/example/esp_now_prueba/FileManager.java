@@ -55,28 +55,16 @@ public class FileManager {
     private DownloadCallback downloadCallback;
 
     // ════════════════════════════════════════════════════════════════════
-    // 📞 INTERFACES DE CALLBACKS
+    // INTERFACES DE CALLBACKS
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Callback para subida de archivos
-     */
+    //Callback para subida de archivos
     public interface UploadCallback {
-        /**
-         * Progreso de subida
-         * @param percentage Porcentaje (0-100)
-         */
+        //Progreso de subida - @param percentage Porcentaje (0-100)
         void onProgress(int percentage);
-
-        /**
-         * Subida completada exitosamente
-         */
+        //Subida completada exitosamente
         void onComplete();
-
-        /**
-         * Error durante subida
-         * @param error Mensaje de error
-         */
+        //Error durante subida - @param error Mensaje de error
         void onError(String error);
     }
 
@@ -104,7 +92,7 @@ public class FileManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🏗️ CONSTRUCTOR
+    // CONSTRUCTOR
     // ════════════════════════════════════════════════════════════════════
 
     /**

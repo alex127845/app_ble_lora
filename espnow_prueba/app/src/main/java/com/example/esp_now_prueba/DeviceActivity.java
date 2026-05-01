@@ -47,14 +47,14 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private static final String TAG = "DeviceActivity";
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔧 CONSTANTES
+    // CONSTANTES
     // ════════════════════════════════════════════════════════════════════
 
     private static final int REQUEST_FILE_UPLOAD = 100;
     private static final int REQUEST_FILE_DOWNLOAD = 101;
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 COMPONENTES UI
+    // COMPONENTES UI
     // ════════════════════════════════════════════════════════════════════
 
     private TextView tvDeviceName;
@@ -76,7 +76,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private ProgressBar progressBarESPNow;
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 BLE Y GESTIÓN DE ARCHIVOS
+    // BLE Y GESTIÓN DE ARCHIVOS
     // ════════════════════════════════════════════════════════════════════
 
     private BLEManager bleManager;
@@ -95,7 +95,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private ESPNowConfig currentESPNowConfig;
 
     // ════════════════════════════════════════════════════════════════════
-    // 🚀 CICLO DE VIDA - onCreate
+    // CICLO DE VIDA - onCreate
     // ════════════════════════════════════════════════════════════════════
 
     @Override
@@ -129,7 +129,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 INICIALIZAR VISTAS
+    // INICIALIZAR VISTAS
     // ════════════════════════════════════════════════════════════════════
 
     private void initViews() {
@@ -192,7 +192,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔧 INICIALIZAR MANAGERS
+    // INICIALIZAR MANAGERS
     // ════════════════════════════════════════════════════════════════════
 
     private void initManagers() {
@@ -208,7 +208,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔌 CONECTAR AL DISPOSITIVO
+    // CONECTAR AL DISPOSITIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void connectToDevice() {
@@ -221,7 +221,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔌 DESCONECTAR DEL DISPOSITIVO
+    // DESCONECTAR DEL DISPOSITIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void disconnect() {
@@ -239,7 +239,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📋 LISTAR ARCHIVOS
+    // LISTAR ARCHIVOS
     // ════════════════════════════════════════════════════════════════════
 
     private void listFiles() {
@@ -262,7 +262,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📤 SELECCIONAR ARCHIVO PARA SUBIR
+    // SELECCIONAR ARCHIVO PARA SUBIR
     // ════════════════════════════════════════════════════════════════════
 
     private void selectFileToUpload() {
@@ -291,7 +291,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📥 DESCARGAR ARCHIVO
+    // DESCARGAR ARCHIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void downloadFile(FileInfo fileInfo) {
@@ -312,7 +312,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🗑️ ELIMINAR ARCHIVO
+    // ELIMINAR ARCHIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void deleteFile(FileInfo fileInfo) {
@@ -332,7 +332,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📊 RESULTADO DE SELECCIÓN DE ARCHIVO
+    // RESULTADO DE SELECCIÓN DE ARCHIVO
     // ════════════════════════════════════════════════════════════════════
 
     @Override
@@ -351,7 +351,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📤 PROCESAR SUBIDA DE ARCHIVO
+    // PROCESAR SUBIDA DE ARCHIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void processFileUpload(Uri fileUri) {
@@ -390,7 +390,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📤 INICIAR SUBIDA DE ARCHIVO
+    // INICIAR SUBIDA DE ARCHIVO
     // ════════════════════════════════════════════════════════════════════
 
     private void startFileUpload(Uri fileUri, String fileName, long fileSize) {
@@ -1087,11 +1087,11 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             });
         }
 
-        // ✅ El comando CMD:GET_MODE se enviará automáticamente en onConnected()
+        // El comando CMD:GET_MODE se enviará automáticamente en onConnected()
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 MOSTRAR/OCULTAR PROGRESO ESP-NOW
+    // MOSTRAR/OCULTAR PROGRESO ESP-NOW
     // ════════════════════════════════════════════════════════════════════
 
     private void showESPNowProgress(boolean show, String text, int progress) {
@@ -1107,7 +1107,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 ACTUALIZAR PROGRESO ESP-NOW
+    // ACTUALIZAR PROGRESO ESP-NOW
     // ════════════════════════════════════════════════════════════════════
 
     private void updateESPNowProgress(int percentage, String text) {

@@ -29,7 +29,7 @@ public class BLEManager {
     private static final String TAG = "BLEManager";
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔧 CONSTANTES - UUIDs del Heltec
+    // CONSTANTES - UUIDs del Heltec
     // ════════════════════════════════════════════════════════════════════
 
     private static final UUID SERVICE_UUID =
@@ -55,7 +55,7 @@ public class BLEManager {
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
 
     // ════════════════════════════════════════════════════════════════════
-    // 🌐 VARIABLES DE INSTANCIA
+    // VARIABLES DE INSTANCIA
     // ════════════════════════════════════════════════════════════════════
 
     private Context context;
@@ -88,7 +88,7 @@ public class BLEManager {
     private Handler handler = new Handler(Looper.getMainLooper());
 
     // ════════════════════════════════════════════════════════════════════
-    // 📞 INTERFACE DE CALLBACKS
+    // INTERFACE DE CALLBACKS
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -104,7 +104,6 @@ public class BLEManager {
          * Se llamó cuando se perdió la conexión
          */
         void onDisconnected();
-
         /**
          * Se llamó cuando se reciben datos del Heltec
          * @param data Datos recibidos como String
@@ -125,7 +124,7 @@ public class BLEManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🏗️ CONSTRUCTOR
+    // CONSTRUCTOR
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -151,7 +150,7 @@ public class BLEManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔌 CONECTAR AL DISPOSITIVO
+    // CONECTAR AL DISPOSITIVO
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -257,7 +256,7 @@ public class BLEManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📤 ENVIAR COMANDO
+    // ENVIAR COMANDO
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -284,7 +283,7 @@ public class BLEManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📤 PROCESAR COLA DE COMANDOS
+    // PROCESAR COLA DE COMANDOS
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -318,7 +317,7 @@ public class BLEManager {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // ✍️ ESCRIBIR CARACTERÍSTICA
+    // ✍ESCRIBIR CARACTERÍSTICA
     // ════════════════════════════════════════════════════════════════════
 
     /**

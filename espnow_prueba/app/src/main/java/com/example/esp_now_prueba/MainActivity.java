@@ -43,7 +43,7 @@ import java.util.List;
 
 /**
  * ════════════════════════════════════════════════════════════════════════
- * 📱 MainActivity - Pantalla Principal de Escaneo BLE
+ * MainActivity - Pantalla Principal de Escaneo BLE
  * ════════════════════════════════════════════════════════════════════════
  *
  * Esta actividad permite:
@@ -52,24 +52,19 @@ import java.util.List;
  * - Gestionar permisos de Bluetooth y ubicación
  * - Navegar a DeviceActivity al seleccionar un dispositivo
  *
- * @author alex127845
- * @date 2025-01-21
- * @version 2.0
  */
 public class MainActivity extends AppCompatActivity {
-
     private static final String TAG = "MainActivity";
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔧 CONSTANTES
+    // CONSTANTES
     // ════════════════════════════════════════════════════════════════════
-
     private static final int REQUEST_ENABLE_BT = 1;
     private static final int REQUEST_PERMISSIONS = 2;
     private static final long SCAN_PERIOD = 10000; // 10 segundos de escaneo
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 COMPONENTES UI
+    // COMPONENTES UI
     // ════════════════════════════════════════════════════════════════════
 
     private Button btnScan;
@@ -79,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
     private DeviceAdapter deviceAdapter;
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 BLUETOOTH
+    // BLUETOOTH
     // ════════════════════════════════════════════════════════════════════
 
     private BluetoothAdapter bluetoothAdapter;
@@ -91,7 +86,7 @@ public class MainActivity extends AppCompatActivity {
     private List<BluetoothDevice> deviceList = new ArrayList<>();
 
     // ════════════════════════════════════════════════════════════════════
-    // 🚀 CICLO DE VIDA - onCreate
+    // CICLO DE VIDA - onCreate
     // ════════════════════════════════════════════════════════════════════
 
     @Override
@@ -99,7 +94,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        Log.d(TAG, "📱 MainActivity iniciada");
+        Log.d(TAG, "MainActivity iniciada");
 
         // Configurar ActionBar
         if (getSupportActionBar() != null) {
@@ -117,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 INICIALIZAR VISTAS
+    // INICIALIZAR VISTAS
     // ════════════════════════════════════════════════════════════════════
 
     private void initViews() {
@@ -145,7 +140,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 INICIALIZAR BLUETOOTH
+    // INICIALIZAR BLUETOOTH
     // ════════════════════════════════════════════════════════════════════
 
     private void initBluetooth() {
@@ -185,7 +180,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔐 VERIFICAR Y SOLICITAR PERMISOS
+    // VERIFICAR Y SOLICITAR PERMISOS
     // ════════════════════════════════════════════════════════════════════
 
     private void checkPermissions() {
@@ -236,7 +231,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📊 RESULTADO DE SOLICITUD DE PERMISOS
+    // RESULTADO DE SOLICITUD DE PERMISOS
     // ════════════════════════════════════════════════════════════════════
 
     @Override
@@ -257,7 +252,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (allGranted) {
                 Log.d(TAG, "✅ Todos los permisos concedidos");
-                Toast.makeText(this, "✅ Permisos concedidos", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show();
             } else {
                 Log.e(TAG, "❌ Permisos denegados");
                 showPermissionDialog();
@@ -266,7 +261,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 💬 DIÁLOGO DE PERMISOS
+    // DIÁLOGO DE PERMISOS
     // ════════════════════════════════════════════════════════════════════
 
     private void showPermissionDialog() {
@@ -286,7 +281,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📊 RESULTADO DE ACTIVACIÓN DE BLUETOOTH
+    // RESULTADO DE ACTIVACIÓN DE BLUETOOTH
     // ════════════════════════════════════════════════════════════════════
 
     @Override
@@ -296,7 +291,7 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == REQUEST_ENABLE_BT) {
             if (resultCode == RESULT_OK) {
                 Log.d(TAG, "✅ Bluetooth habilitado por el usuario");
-                Toast.makeText(this, "✅ Bluetooth habilitado", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Bluetooth habilitado", Toast.LENGTH_SHORT).show();
                 bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
             } else {
                 Log.e(TAG, "❌ Usuario rechazó habilitar Bluetooth");
@@ -306,7 +301,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔍 INICIAR ESCANEO BLE
+    // INICIAR ESCANEO BLE
     // ════════════════════════════════════════════════════════════════════
 
     private void startScan() {
@@ -355,7 +350,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // ⏹️ DETENER ESCANEO BLE
+    // DETENER ESCANEO BLE
     // ════════════════════════════════════════════════════════════════════
 
     private void stopScan() {
@@ -387,7 +382,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 CALLBACK DE ESCANEO BLE
+    // CALLBACK DE ESCANEO BLE
     // ════════════════════════════════════════════════════════════════════
 
     private final ScanCallback scanCallback = new ScanCallback() {
@@ -434,7 +429,7 @@ public class MainActivity extends AppCompatActivity {
     };
 
     // ════════════════════════════════════════════════════════════════════
-    // 🎨 ACTUALIZAR UI
+    // ACTUALIZAR UI
     // ════════════════════════════════════════════════════════════════════
 
     private void updateUI(boolean scanning, String status) {
@@ -456,35 +451,34 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // ❌ MOSTRAR ERROR
+    // MOSTRAR ERROR
     // ════════════════════════════════════════════════════════════════════
 
     private void showError(String message) {
         runOnUiThread(() -> {
-            Toast.makeText(this, "❌ " + message, Toast.LENGTH_LONG).show();
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
         });
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔄 CICLO DE VIDA - onDestroy
+    // CICLO DE VIDA - onDestroy
     // ════════════════════════════════════════════════════════════════════
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        Log.d(TAG, "💥 MainActivity destruida");
+        Log.d(TAG, "MainActivity destruida");
 
         // Detener escaneo si está activo
         if (isScanning) {
             stopScan();
         }
-
         // Limpiar handler
         handler.removeCallbacksAndMessages(null);
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📋 ADAPTADOR DE LISTA DE DISPOSITIVOS
+    // ADAPTADOR DE LISTA DE DISPOSITIVOS
     // ════════════════════════════════════════════════════════════════════
 
     /**
@@ -552,9 +546,7 @@ public class MainActivity extends AppCompatActivity {
             return deviceList.size();
         }
 
-        /**
-         * ViewHolder para cada item de la lista
-         */
+        //ViewHolder para cada item de la lista
         class ViewHolder extends RecyclerView.ViewHolder {
             TextView tvDeviceName;
             TextView tvDeviceAddress;
