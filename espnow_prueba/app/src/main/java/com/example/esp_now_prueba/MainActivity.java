@@ -28,7 +28,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -252,7 +251,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (allGranted) {
                 Log.d(TAG, "✅ Todos los permisos concedidos");
-                Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show();
+                AppNotificationManager.showSuccess(this, "Permisos concedidos");
             } else {
                 Log.e(TAG, "❌ Permisos denegados");
                 showPermissionDialog();
@@ -291,7 +290,7 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == REQUEST_ENABLE_BT) {
             if (resultCode == RESULT_OK) {
                 Log.d(TAG, "✅ Bluetooth habilitado por el usuario");
-                Toast.makeText(this, "Bluetooth habilitado", Toast.LENGTH_SHORT).show();
+                AppNotificationManager.showSuccess(this, "Bluetooth habilitado");
                 bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
             } else {
                 Log.e(TAG, "❌ Usuario rechazó habilitar Bluetooth");
@@ -456,7 +455,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showError(String message) {
         runOnUiThread(() -> {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            AppNotificationManager.showError(this, message);
         });
     }
 
