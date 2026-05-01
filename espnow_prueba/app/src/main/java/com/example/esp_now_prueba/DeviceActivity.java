@@ -22,7 +22,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
+import android.graphics.Color;
 
 import android.widget.Spinner;
 import android.widget.ArrayAdapter;
@@ -74,6 +74,10 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
     private View layoutESPNowTransmitting;
     private TextView tvESPNowProgress;
     private ProgressBar progressBarESPNow;
+
+    // Status bar persistente
+    private TextView tvStatusBarConnection;
+    private TextView tvStatusBarEvent;
 
     // ════════════════════════════════════════════════════════════════════
     // BLE Y GESTIÓN DE ARCHIVOS
@@ -189,6 +193,10 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         // Detectar modo TX/RX del nombre del dispositivo
         detectDeviceMode();
+
+        // Status bar persistente
+        tvStatusBarConnection = findViewById(R.id.tvStatusBarConnection);
+        tvStatusBarEvent = findViewById(R.id.tvStatusBarEvent);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -244,7 +252,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
     private void listFiles() {
         if (!isConnected) {
-            Toast.makeText(this, "⚠️ No conectado", Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showWarning(this, "⚠️ No conectado");
             return;
         }
 
@@ -267,7 +275,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
     private void selectFileToUpload() {
         if (!isConnected) {
-            Toast.makeText(this, "⚠️ No conectado", Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showWarning(this, "⚠️ No conectado");
             return;
         }
 
@@ -285,8 +293,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             );
         } catch (Exception e) {
             Log.e(TAG, "❌ Error abriendo selector: " + e.getMessage());
-            Toast.makeText(this, "❌ Error abriendo selector de archivos",
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showError(this, "❌ Error abriendo selector de archivos");
         }
     }
 
@@ -365,9 +372,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
             // Verificar tamaño máximo (1.5 MB para LittleFS típico)
             if (fileSize > 1500000) {
-                Toast.makeText(this,
-                        "⚠️ Archivo muy grande (máx 1.5 MB)",
-                        Toast.LENGTH_LONG).show();
+                AppNotificationManager.showWarning(this, "⚠️ Archivo muy grande (máx 1.5 MB)");
                 return;
             }
 
@@ -384,8 +389,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         } catch (Exception e) {
             Log.e(TAG, "❌ Error procesando archivo: " + e.getMessage());
-            Toast.makeText(this, "❌ Error: " + e.getMessage(),
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showError(this, "❌ Error: " + e.getMessage());
         }
     }
 
@@ -413,8 +417,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 if (inputStream == null) {
                     runOnUiThread(() -> {
                         showProgress(false, "", 0);
-                        Toast.makeText(this, "❌ Error leyendo archivo",
-                                Toast.LENGTH_SHORT).show();
+                        AppNotificationManager.showError(DeviceActivity.this, "❌ Error leyendo archivo");
                     });
                     return;
                 }
@@ -437,10 +440,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                             public void onComplete() {
                                 runOnUiThread(() -> {
                                     showProgress(false, "", 0);
-                                    Toast.makeText(DeviceActivity.this,
-                                            "✅ Archivo subido correctamente",
-                                            Toast.LENGTH_SHORT).show();
-
+                                    AppNotificationManager.showSuccess(DeviceActivity.this,
+                                            "✅ Archivo subido correctamente");
+                                    updateStatusEvent("Archivo subido: " + fileName);
                                     // Actualizar lista
                                     new Handler().postDelayed(() -> listFiles(), 1000);
                                 });
@@ -450,9 +452,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                             public void onError(String error) {
                                 runOnUiThread(() -> {
                                     showProgress(false, "", 0);
-                                    Toast.makeText(DeviceActivity.this,
-                                            "❌ Error: " + error,
-                                            Toast.LENGTH_LONG).show();
+                                    AppNotificationManager.showError(DeviceActivity.this,
+                                            "❌ Error: " + error);
                                 });
                             }
                         }
@@ -464,8 +465,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 Log.e(TAG, "❌ Error en upload: " + e.getMessage());
                 runOnUiThread(() -> {
                     showProgress(false, "", 0);
-                    Toast.makeText(this, "❌ Error: " + e.getMessage(),
-                            Toast.LENGTH_LONG).show();
+                    AppNotificationManager.showError(this, "❌ Error: " + e.getMessage());
                 });
             }
         }).start();
@@ -533,8 +533,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             isConnected = true;
             tvConnectionStatus.setText("🟢 Conectado");
             setButtonsEnabled(true);
-            Toast.makeText(this, "✅ Conectado a " + deviceName,
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showSuccess(this, "✅ Conectado a " + deviceName);
+            updateStatusConnection(true);
+            updateStatusEvent("Conectado a " + deviceName);
 
             // Listar archivos automáticamente
             new Handler().postDelayed(() -> {
@@ -557,7 +558,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             isConnected = false;
             tvConnectionStatus.setText("🔴 Desconectado");
             setButtonsEnabled(false);
-            Toast.makeText(this, "🔴 Desconectado", Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showInfo(this, "🔴 Desconectado");
+            updateStatusConnection(false);
+            updateStatusEvent("Desconectado");
         });
     }
 
@@ -585,7 +588,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         runOnUiThread(() -> {
             showProgress(false, "", 0);
-            Toast.makeText(this, "❌ Error: " + error, Toast.LENGTH_LONG).show();
+            AppNotificationManager.showError(this, "❌ Error: " + error);
+            updateStatusEvent("Error: " + error);
         });
     }
 
@@ -610,8 +614,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             showProgress(false, "", 0);
 
             if (fileList.isEmpty()) {
-                Toast.makeText(this, "📂 No hay archivos en el dispositivo",
-                        Toast.LENGTH_SHORT).show();
+                AppNotificationManager.showInfo(this, "📂 No hay archivos en el dispositivo");
             }
             return;
         }
@@ -635,7 +638,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         if (data.equals("OK:DELETED")) {
             Log.d(TAG, "✅ Archivo eliminado");
             showProgress(false, "", 0);
-            Toast.makeText(this, "✅ Archivo eliminado", Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showSuccess(this, "✅ Archivo eliminado");
+            updateStatusEvent("Archivo eliminado");
 
             // Actualizar lista
             new Handler().postDelayed(() -> listFiles(), 500);
@@ -679,17 +683,16 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                             @Override
                             public void onComplete(File file) {
                                 showProgress(false, "", 0);
-                                Toast.makeText(DeviceActivity.this,
-                                        "✅ Descargado: " + file.getName(),
-                                        Toast.LENGTH_SHORT).show();
+                                AppNotificationManager.showSuccess(DeviceActivity.this,
+                                        "✅ Descargado: " + file.getName());
+                                updateStatusEvent("Archivo descargado: " + file.getName());
                             }
 
                             @Override
                             public void onError(String error) {
                                 showProgress(false, "", 0);
-                                Toast.makeText(DeviceActivity.this,
-                                        "❌ Error: " + error,
-                                        Toast.LENGTH_LONG).show();
+                                AppNotificationManager.showError(DeviceActivity.this,
+                                        "❌ Error: " + error);
                             }
                         });
             }
@@ -733,7 +736,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                     mensaje = error;
             }
 
-            Toast.makeText(this, "❌ " + mensaje, Toast.LENGTH_LONG).show();
+            AppNotificationManager.showError(this, "❌ " + mensaje);
+            updateStatusEvent("Error: " + mensaje);
         }
 
         // Config ESP-NOW recibida
@@ -742,16 +746,14 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             Log.d(TAG, "⚙️ Configuración ESP-NOW recibida: " + json);
             currentESPNowConfig.fromJson(json);
             updateESPNowStatusUI();
-            Toast.makeText(this, "✅ Config ESP-NOW cargada (guardada en flash)",
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showSuccess(this, "✅ Config ESP-NOW cargada (guardada en flash)");
             return;
         }
 
         // Confirmación de config ESP-NOW
         if (data.equals("OK:ESPNOW_CONFIG_SET")) {
             Log.d(TAG, "✅ Configuración ESP-NOW aplicada y guardada");
-            Toast.makeText(this, "✅ Configuración guardada en memoria flash",
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showSuccess(this, "✅ Configuración guardada en memoria flash");
             return;
         }
 
@@ -798,7 +800,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             showESPNowProgress(false, "", 0);
 
             String reason = data.substring(10);
-            Toast.makeText(this, "❌ TX fallida: " + reason, Toast.LENGTH_LONG).show();
+            AppNotificationManager.showError(this, "❌ TX fallida: " + reason);
+            updateStatusEvent("TX fallida: " + reason);
             return;
         }
 
@@ -810,8 +813,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 String size = parts[1];
 
                 showESPNowProgress(true, "Recibiendo " + filename + "...", 0);
-                Toast.makeText(this, "📥 Recibiendo: " + filename,
-                        Toast.LENGTH_SHORT).show();
+                AppNotificationManager.showInfo(this, "📥 Recibiendo: " + filename);
+                updateStatusEvent("Recibiendo: " + filename);
             }
             return;
         }
@@ -855,6 +858,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                         .setPositiveButton("OK", null)
                         .show();
 
+                updateStatusEvent("Recibido: " + filename);
                 // Actualizar lista
                 new Handler().postDelayed(() -> listFiles(), 1000);
             }
@@ -866,7 +870,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
             showESPNowProgress(false, "", 0);
 
             String reason = data.substring(10);
-            Toast.makeText(this, "❌ RX fallida: " + reason, Toast.LENGTH_LONG).show();
+            AppNotificationManager.showError(this, "❌ RX fallida: " + reason);
+            updateStatusEvent("RX fallida: " + reason);
             return;
         }
 
@@ -879,7 +884,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 Log.d(TAG, "✅ Modo confirmado: TRANSMISOR");
                 runOnUiThread(() -> {
                     tvESPNowStatus.setText("📡 Modo: TRANSMISOR");
-                    Toast.makeText(this, "📡 Conectado a TX", Toast.LENGTH_SHORT).show();
+                    AppNotificationManager.showInfo(this, "📡 Conectado a TX");
+                    updateStatusEvent("Modo: TRANSMISOR");
                     // Actualizar lista para mostrar/ocultar botones ESP-NOW
                     fileAdapter.notifyDataSetChanged();
                 });
@@ -888,7 +894,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 Log.d(TAG, "✅ Modo confirmado: RECEPTOR");
                 runOnUiThread(() -> {
                     tvESPNowStatus.setText("📥 Modo: RECEPTOR");
-                    Toast.makeText(this, "📥 Conectado a RX", Toast.LENGTH_SHORT).show();
+                    AppNotificationManager.showInfo(this, "📥 Conectado a RX");
+                    updateStatusEvent("Modo: RECEPTOR");
                     // Actualizar lista para mostrar/ocultar botones ESP-NOW
                     fileAdapter.notifyDataSetChanged();
                 });
@@ -898,6 +905,36 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
 
 
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 🟢 STATUS BAR - Actualizar estado de conexión
+    // ════════════════════════════════════════════════════════════════════
+
+    private void updateStatusConnection(boolean connected) {
+        runOnUiThread(() -> {
+            if (tvStatusBarConnection != null) {
+                if (connected) {
+                    tvStatusBarConnection.setText("🟢 Conectado");
+                    tvStatusBarConnection.setTextColor(Color.parseColor("#A5D6A7"));
+                } else {
+                    tvStatusBarConnection.setText("🔴 Desconectado");
+                    tvStatusBarConnection.setTextColor(Color.parseColor("#EF9A9A"));
+                }
+            }
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 📋 STATUS BAR - Actualizar último evento
+    // ════════════════════════════════════════════════════════════════════
+
+    private void updateStatusEvent(String event) {
+        runOnUiThread(() -> {
+            if (tvStatusBarEvent != null) {
+                tvStatusBarEvent.setText(event);
+            }
+        });
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1119,7 +1156,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
     private void showESPNowConfigDialog() {
         if (!isConnected) {
-            Toast.makeText(this, "⚠️ No conectado", Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showWarning(this, "⚠️ No conectado");
             return;
         }
 
@@ -1189,8 +1226,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 .setNegativeButton("❌ Cancelar", null)
                 .setNeutralButton("🔄 Obtener Actual", (dialog, which) -> {
                     bleManager.sendCommand("CMD:GET_ESPNOW_CONFIG");
-                    Toast.makeText(this, "📡 Solicitando configuración guardada...",
-                            Toast.LENGTH_SHORT).show();
+                    AppNotificationManager.showInfo(this, "📡 Solicitando configuración guardada...");
                 })
                 .show();
     }
@@ -1207,7 +1243,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
         updateESPNowStatusUI();
 
-        Toast.makeText(this, "✅ Config enviada y guardada en el Heltec", Toast.LENGTH_SHORT).show();
+        AppNotificationManager.showSuccess(this, "✅ Config enviada y guardada en el Heltec");
+        updateStatusEvent("Config ESP-NOW aplicada");
     }
 
     private void updateESPNowStatusUI() {
@@ -1223,14 +1260,12 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
     private void transmitFileViaESPNow(FileInfo fileInfo) {
         if (!isTxMode) {
-            Toast.makeText(this, "⚠️ Solo disponible en modo TX",
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showWarning(this, "⚠️ Solo disponible en modo TX");
             return;
         }
 
         if (isTransmitting) {
-            Toast.makeText(this, "⚠️ Ya hay una transmisión en progreso",
-                    Toast.LENGTH_SHORT).show();
+            AppNotificationManager.showWarning(this, "⚠️ Ya hay una transmisión en progreso");
             return;
         }
 
@@ -1254,8 +1289,8 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
 
                     bleManager.sendCommand("CMD:TX_FILE:" + file.name);
 
-                    Toast.makeText(this, "📡 Transmitiendo en BROADCAST...",
-                            Toast.LENGTH_SHORT).show();
+                    AppNotificationManager.showInfo(this, "📡 Transmitiendo en BROADCAST...");
+                    updateStatusEvent("Transmitiendo: " + file.name);
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();
