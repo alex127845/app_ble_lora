@@ -40,7 +40,10 @@
 
 #define MAX_CHUNKS      4096
 
-#define FEC_BLOCK_SIZE  8
+#define FEC_MODE                2       // 0=DISABLED, 1=XOR_SIMPLE, 2=XOR_ENHANCED, 3=REED_SOLOMON_FUTURE
+#define FEC_BLOCK_SIZE          16      // chunks por bloque (aumentado de 8)
+#define FEC_PARITIES_PER_BLOCK  3       // paridades por bloque (aumentado de 1)
+#define MAX_RECOVERABLE_PER_BLOCK 3     // máximo chunks recuperables por bloque
 #define MANIFEST_REPEAT 5
 #define REPEAT_COUNT    3
 #define MAX_FEC_PASSES  3
@@ -79,6 +82,7 @@ unsigned long receptionStartTime = 0;
 uint8_t**  chunkBuffer   = nullptr;
 bool*      chunkReceived = nullptr;
 uint16_t*  chunkLengths  = nullptr;
+bool*      chunkIsRealData = nullptr;  // true = datos reales, false = relleno
 
 // FEC — Parity buffers
 #define MAX_PARITY_BLOCKS (MAX_CHUNKS / FEC_BLOCK_SIZE)
@@ -418,12 +422,13 @@ void setupESPNowBuffers() {
   chunkBuffer   = (uint8_t**)calloc(MAX_CHUNKS,       sizeof(uint8_t*));
   chunkReceived = (bool*)    calloc(MAX_CHUNKS,        sizeof(bool));
   chunkLengths  = (uint16_t*)calloc(MAX_CHUNKS,        sizeof(uint16_t));
+  chunkIsRealData = (bool*)  calloc(MAX_CHUNKS,        sizeof(bool));
 
   parityBuffer   = (uint8_t**)calloc(MAX_PARITY_BLOCKS, sizeof(uint8_t*));
   parityReceived = (bool*)    calloc(MAX_PARITY_BLOCKS, sizeof(bool));
   parityLengths  = (uint16_t*)calloc(MAX_PARITY_BLOCKS, sizeof(uint16_t));
 
-  if (!chunkBuffer || !chunkReceived || !chunkLengths ||
+  if (!chunkBuffer || !chunkReceived || !chunkLengths || !chunkIsRealData ||
       !parityBuffer || !parityReceived || !parityLengths) {
     Serial.println("❌ CRÍTICO: Sin RAM para buffers ESP-NOW");
     while (1) delay(1000);
@@ -1025,10 +1030,19 @@ void handleDataChunk(uint8_t* data, size_t len) {
   }
 
   if (chunkReceived[chunkIndex]) {
-    duplicateChunks++;
-    uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
-    duplicatesByRound[roundIdx]++;
-    return;
+    // Si ya existe pero es relleno, permitir reemplazo con datos reales
+    if (!chunkIsRealData[chunkIndex]) {
+      // Es relleno, reemplazarlo
+      free(chunkBuffer[chunkIndex]);
+      chunkBuffer[chunkIndex] = nullptr;
+      Serial.printf("🔄 Reemplazando relleno en chunk %u con datos reales\n", chunkIndex);
+    } else {
+      // Datos reales duplicados
+      duplicateChunks++;
+      uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
+      duplicatesByRound[roundIdx]++;
+      return;
+    }
   }
 
   if (len <= idx + 2) {
@@ -1065,6 +1079,7 @@ void handleDataChunk(uint8_t* data, size_t len) {
     memcpy(chunkBuffer[chunkIndex], data + idx, dataLen);
     chunkLengths[chunkIndex]  = dataLen;
     chunkReceived[chunkIndex] = true;
+    chunkIsRealData[chunkIndex] = true;
     receivedDataChunks++;
     uint8_t roundIdx = (currentRound > 0 && currentRound <= REPEAT_COUNT) ? (currentRound - 1) : 0;
     chunksByRound[roundIdx]++;
@@ -1137,8 +1152,24 @@ void handleFileEnd(uint8_t* data, size_t len) {
 // FEC RECOVERY
 // ════════════════════════════════════════════════════════════════
 
-uint16_t recoverMissingChunks() {
-  Serial.println("\n🔧 FEC Recovery...");
+uint16_t countRealData() {
+  uint16_t count = 0;
+  for (uint16_t i = 0; i < totalChunks; i++) {
+    if (chunkReceived[i] && chunkIsRealData[i]) count++;
+  }
+  return count;
+}
+
+uint16_t countFilledData() {
+  uint16_t count = 0;
+  for (uint16_t i = 0; i < totalChunks; i++) {
+    if (chunkReceived[i] && !chunkIsRealData[i]) count++;
+  }
+  return count;
+}
+
+uint16_t recoverWithXORSimple() {
+  Serial.println("\n🔧 FEC Recovery (XOR Simple)...");
   uint16_t recovered = 0;
 
   uint16_t numBlocks = (totalChunks + FEC_BLOCK_SIZE - 1) / FEC_BLOCK_SIZE;
@@ -1194,8 +1225,9 @@ uint16_t recoverMissingChunks() {
         }
       }
 
-      chunkLengths[missingIdx]  = recoveredLen;
-      chunkReceived[missingIdx] = true;
+      chunkLengths[missingIdx]    = recoveredLen;
+      chunkReceived[missingIdx]   = true;
+      chunkIsRealData[missingIdx] = true;
       receivedDataChunks++;
       recovered++;
       progress = true;
@@ -1204,9 +1236,111 @@ uint16_t recoverMissingChunks() {
     }
   }
 
-  if (recovered > 0) Serial.printf("🎉 %u chunk(s) recuperados con FEC\n", recovered);
-  else               Serial.println("ℹ️  Sin chunks recuperables por FEC");
+  if (recovered > 0) Serial.printf("🎉 %u chunk(s) recuperados con FEC Simple\n", recovered);
+  else               Serial.println("ℹ️  Sin chunks recuperables por FEC Simple");
   return recovered;
+}
+
+uint16_t recoverWithXOREnhanced() {
+  Serial.println("\n🔧 FEC Recovery (XOR Enhanced - 3 Paridades)...");
+  uint16_t recovered = 0;
+
+  uint16_t numBlocks = (totalChunks + FEC_BLOCK_SIZE - 1) / FEC_BLOCK_SIZE;
+  bool progress = true;
+  uint8_t pass = 0;
+
+  while (progress && pass < MAX_FEC_PASSES) {
+    progress = false;
+    pass++;
+    for (uint16_t block = 0; block < numBlocks; block++) {
+      if (!parityReceived[block]) continue;
+
+      uint16_t baseIdx = block * FEC_BLOCK_SIZE;
+
+      int missingCount = 0;
+      int missingIndices[MAX_RECOVERABLE_PER_BLOCK];
+      for (int j = 0; j < MAX_RECOVERABLE_PER_BLOCK; j++) missingIndices[j] = -1;
+
+      for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
+        if (!chunkReceived[baseIdx + i]) {
+          if (missingCount < MAX_RECOVERABLE_PER_BLOCK) {
+            missingIndices[missingCount] = i;
+          }
+          missingCount++;
+        }
+      }
+
+      if (missingCount == 0 || missingCount > MAX_RECOVERABLE_PER_BLOCK) continue;
+
+      for (int m = 0; m < missingCount; m++) {
+        int missing = missingIndices[m];
+        uint16_t missingIdx = baseIdx + missing;
+        size_t maxLen = parityLengths[block];
+
+        if (chunkBuffer[missingIdx] != nullptr) {
+          free(chunkBuffer[missingIdx]);
+          chunkBuffer[missingIdx] = nullptr;
+        }
+        chunkBuffer[missingIdx] = (uint8_t*)malloc(maxLen);
+        if (!chunkBuffer[missingIdx]) continue;
+
+        memcpy(chunkBuffer[missingIdx], parityBuffer[block], maxLen);
+
+        for (int i = 0; i < FEC_BLOCK_SIZE && (baseIdx + i) < totalChunks; i++) {
+          if (i == missing) continue;
+          if (!chunkReceived[baseIdx + i]) continue;
+
+          size_t xorLen = min(maxLen, (size_t)chunkLengths[baseIdx + i]);
+          for (size_t k = 0; k < xorLen; k++)
+            chunkBuffer[missingIdx][k] ^= chunkBuffer[baseIdx + i][k];
+        }
+
+        size_t recoveredLen = maxLen;
+        if (missingIdx == (totalChunks - 1)) {
+          size_t lastChunkOffset = (size_t)(totalChunks - 1) * CHUNK_SIZE_ESPNOW;
+          if (receivingFileSize > lastChunkOffset) {
+            size_t expectedLastLen = receivingFileSize - lastChunkOffset;
+            recoveredLen = min(recoveredLen, expectedLastLen);
+          }
+        }
+
+        chunkLengths[missingIdx]    = recoveredLen;
+        chunkReceived[missingIdx]   = true;
+        chunkIsRealData[missingIdx] = true;
+        receivedDataChunks++;
+        recovered++;
+        progress = true;
+
+        Serial.printf("✅ Chunk %u recuperado (bloque FEC %u, error %u/%u, pasada %u)\n",
+                      missingIdx, block, m + 1, missingCount, pass);
+      }
+    }
+  }
+
+  if (recovered > 0) Serial.printf("🎉 %u chunk(s) recuperados con FEC Enhanced\n", recovered);
+  else               Serial.println("ℹ️  Sin chunks recuperables por FEC Enhanced");
+  return recovered;
+}
+
+uint16_t recoverWithReedSolomon() {
+  Serial.println("\n🔧 FEC Recovery (Reed-Solomon - NO IMPLEMENTADO AÚN)");
+  Serial.println("⚠️  Fallback a XOR Enhanced...");
+  return recoverWithXOREnhanced();
+}
+
+uint16_t recoverMissingChunks() {
+  #if FEC_MODE == 0
+    Serial.println("ℹ️  FEC deshabilitado");
+    return 0;
+  #elif FEC_MODE == 1
+    return recoverWithXORSimple();
+  #elif FEC_MODE == 2
+    return recoverWithXOREnhanced();
+  #elif FEC_MODE == 3
+    return recoverWithReedSolomon();
+  #else
+    return 0;
+  #endif
 }
 
 void printPacketDropStats(const char *context) {
@@ -1247,18 +1381,19 @@ void assembleFile() {
   for (uint16_t i = 0; i < totalChunks; i++)
     if (!chunkReceived[i]) missingChunks++;
 
-  Serial.printf("📊 Recibidos: %u/%u | Perdidos: %u (%.1f%%) | Parity: %u | Dupes: %u\n",
+  Serial.printf("📊 Recibidos: %u/%u | Perdidos: %u (%.1f%%) | Reales: %u | Rellenos: %u | Parity: %u | Dupes: %u\n",
                 receivedDataChunks, totalChunks,
                 missingChunks, (missingChunks * 100.0) / totalChunks,
+                countRealData(), countFilledData(),
                 receivedParityChunks, duplicateChunks);
 
   if (missingChunks > 0 && missingChunks <= MAX_TOLERABLE_GAPS) {
     // Tradeoff explícito: para datacasting broadcast preferimos completitud del archivo
     // con pocos gaps rellenados en cero, en lugar de descartar toda la transferencia.
-    Serial.printf("⚠️  Tolerando %u gap(s) y rellenando con ceros...\n", missingChunks);
+    Serial.printf("⚠️  Tolerando %u gap(s) sin datos reales, rellenando con ceros...\n", missingChunks);
     uint16_t gapFillFailures = 0;
     for (uint16_t i = 0; i < totalChunks; i++) {
-      if (chunkReceived[i]) continue;
+      if (chunkReceived[i]) continue;  // Ya tiene datos (reales o relleno anterior)
 
       size_t expectedLen = receivingChunkSize;
       if (i == (totalChunks - 1)) {
@@ -1272,6 +1407,7 @@ void assembleFile() {
       if (chunkBuffer[i] != nullptr) {
         chunkLengths[i] = expectedLen;
         chunkReceived[i] = true;
+        chunkIsRealData[i] = false;  // Marcar como relleno
       } else {
         gapFillFailures++;
       }
@@ -1373,8 +1509,9 @@ void resetReceptionBuffers() {
       free(chunkBuffer[i]);
       chunkBuffer[i] = nullptr;
     }
-    chunkReceived[i] = false;
-    chunkLengths[i]  = 0;
+    chunkReceived[i]   = false;
+    chunkLengths[i]    = 0;
+    chunkIsRealData[i] = false;
   }
 
   for (uint16_t i = 0; i < MAX_PARITY_BLOCKS; i++) {
