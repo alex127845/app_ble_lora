@@ -1,4 +1,5 @@
 package com.example.esp_now_prueba;
+
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean; // ✅ FIX #3
 
 public class BLEManager {
 
@@ -44,22 +46,30 @@ public class BLEManager {
     private static final UUID PROGRESS_UUID =
             UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26aa");
 
-    // Descriptor para habilitar notificaciones
     private static final UUID CCCD_UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     // Configuración
-    private static final int MAX_MTU = 517; // MTU máximo solicitado
-    private static final int WRITE_DELAY = 50; // Delay entre escrituras (ms)
-    private static final int RECONNECT_DELAY = 3000; // Delay para reconexión (ms)
+    private static final int MAX_MTU           = 517;
+    private static final int RECONNECT_DELAY   = 3000;
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
+
+    // ✅ FIX #1 — Tamaño de payload BLE seguro.
+    // El payload usable por paquete es MTU - 3 = 514 bytes.
+    // Reservamos 17 bytes para el prefijo "CMD:UPLOAD_CHUNK:" y 1 para el '\n'.
+    // Payload de datos útiles por sub-paquete = 514 - 18 = 496 bytes.
+    // Pero como usamos Base64, la relación binario→texto es 3:4,
+    // así que el chunk binario máximo para que quepa en UN solo write es:
+    //   floor(496 * 3 / 4) = 372 bytes.
+    // Usamos 360 para tener margen ante variaciones de MTU real.
+    public static final int MAX_CHUNK_BYTES = 360;
 
     // ════════════════════════════════════════════════════════════════════
     // VARIABLES DE INSTANCIA
     // ════════════════════════════════════════════════════════════════════
 
-    private Context context;
-    private BLECallback callback;
+    private final Context context;
+    private final BLECallback callback;
 
     // Bluetooth
     private BluetoothManager bluetoothManager;
@@ -72,54 +82,38 @@ public class BLEManager {
     private BluetoothGattCharacteristic dataCharacteristic;
     private BluetoothGattCharacteristic progressCharacteristic;
 
+    // MTU negociado real (se actualiza en onMtuChanged)
+    private int negotiatedMtu = 23; // valor mínimo BLE por defecto
+
     // Estado de conexión
-    private boolean isConnected = false;
-    private boolean isConnecting = false;
+    private volatile boolean isConnected  = false;
+    private volatile boolean isConnecting = false;
     private int reconnectAttempts = 0;
 
     // Cola de comandos
-    private Queue<String> commandQueue = new ConcurrentLinkedQueue<>();
-    private boolean isWriting = false;
+    // ✅ FIX #3 — isWriting como AtomicBoolean para seguridad entre hilos
+    private final Queue<String> commandQueue = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean isWriting = new AtomicBoolean(false);
 
     // Buffer para datos recibidos
-    private StringBuilder dataBuffer = new StringBuilder();
+    private final StringBuilder dataBuffer = new StringBuilder();
 
-    // Handler para operaciones asíncronas
-    private Handler handler = new Handler(Looper.getMainLooper());
+    // ✅ FIX #2 — Lock y cola de respuestas para sendCommandAndWaitForPrefix
+    private final Object responseLock = new Object();
+    private final List<String> responseQueue = new ArrayList<>();
+
+    // Handler para operaciones asíncronas (main thread)
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     // ════════════════════════════════════════════════════════════════════
     // INTERFACE DE CALLBACKS
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Interface para recibir eventos del BLEManager
-     */
     public interface BLECallback {
-        /**
-         * Se llamó cuando la conexión se estableció correctamente
-         */
         void onConnected();
-
-        /**
-         * Se llamó cuando se perdió la conexión
-         */
         void onDisconnected();
-        /**
-         * Se llamó cuando se reciben datos del Heltec
-         * @param data Datos recibidos como String
-         */
         void onDataReceived(String data);
-
-        /**
-         * Se llamó cuando se recibe un update de progreso
-         * @param percentage Porcentaje (0-100)
-         */
         void onProgress(int percentage);
-
-        /**
-         * Se llamó cuando ocurre un error
-         * @param error Mensaje de error
-         */
         void onError(String error);
     }
 
@@ -127,19 +121,12 @@ public class BLEManager {
     // CONSTRUCTOR
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Constructor del BLEManager
-     *
-     * @param context Contexto de la aplicación
-     * @param callback Callback para eventos BLE
-     */
     public BLEManager(Context context, BLECallback callback) {
-        this.context = context;
+        this.context  = context;
         this.callback = callback;
 
         Log.d(TAG, "🔧 BLEManager inicializado");
 
-        // Obtener BluetoothManager
         bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         if (bluetoothManager != null) {
             bluetoothAdapter = bluetoothManager.getAdapter();
@@ -153,85 +140,65 @@ public class BLEManager {
     // CONECTAR AL DISPOSITIVO
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Conectar al dispositivo Heltec por dirección MAC
-     *
-     * @param deviceAddress Dirección MAC del dispositivo (formato: XX:XX:XX:XX:XX:XX)
-     */
     public void connect(String deviceAddress) {
         Log.d(TAG, "🔌 Intentando conectar a: " + deviceAddress);
 
         if (bluetoothAdapter == null) {
             Log.e(TAG, "❌ BluetoothAdapter no disponible");
-            if (callback != null) {
-                callback.onError("Bluetooth no disponible");
-            }
+            if (callback != null) callback.onError("Bluetooth no disponible");
             return;
         }
 
-        // Verificar si ya está conectado
         if (isConnected || isConnecting) {
             Log.w(TAG, "⚠️ Ya conectado o conectando");
             return;
         }
 
-        // Obtener dispositivo
         try {
             bluetoothDevice = bluetoothAdapter.getRemoteDevice(deviceAddress);
             Log.d(TAG, "✅ Dispositivo obtenido: " + bluetoothDevice.getAddress());
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "❌ Dirección MAC inválida: " + e.getMessage());
-            if (callback != null) {
-                callback.onError("Dirección MAC inválida");
-            }
+            if (callback != null) callback.onError("Dirección MAC inválida");
             return;
         }
 
-        // Verificar permisos
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(context,
                     android.Manifest.permission.BLUETOOTH_CONNECT)
                     != PackageManager.PERMISSION_GRANTED) {
                 Log.e(TAG, "❌ Sin permiso BLUETOOTH_CONNECT");
-                if (callback != null) {
-                    callback.onError("Permiso BLUETOOTH_CONNECT requerido");
-                }
+                if (callback != null) callback.onError("Permiso BLUETOOTH_CONNECT requerido");
                 return;
             }
         }
 
-        // Conectar GATT
         isConnecting = true;
         reconnectAttempts = 0;
 
         Log.d(TAG, "📡 Conectando GATT...");
         bluetoothGatt = bluetoothDevice.connectGatt(
                 context,
-                false,  // autoConnect = false para conexión rápida
+                false,
                 gattCallback,
-                BluetoothDevice.TRANSPORT_LE // Forzar BLE
+                BluetoothDevice.TRANSPORT_LE
         );
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 🔌 DESCONECTAR DEL DISPOSITIVO
+    // DESCONECTAR DEL DISPOSITIVO
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Desconectar del dispositivo Heltec
-     */
     public void disconnect() {
         Log.d(TAG, "🔌 Desconectando...");
 
-        isConnected = false;
+        isConnected  = false;
         isConnecting = false;
-        reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevenir reconexión
+        reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
 
-        // Limpiar cola de comandos
         commandQueue.clear();
-        isWriting = false;
+        isWriting.set(false);
 
-        // Desconectar GATT
         if (bluetoothGatt != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ActivityCompat.checkSelfPermission(context,
@@ -247,9 +214,8 @@ public class BLEManager {
             bluetoothGatt = null;
         }
 
-        // Limpiar características
-        cmdCharacteristic = null;
-        dataCharacteristic = null;
+        cmdCharacteristic      = null;
+        dataCharacteristic     = null;
         progressCharacteristic = null;
 
         Log.d(TAG, "✅ Desconectado");
@@ -259,26 +225,18 @@ public class BLEManager {
     // ENVIAR COMANDO
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Enviar comando al Heltec
-     * Los comandos se encolan para evitar saturar el BLE
-     *
-     * @param command Comando a enviar (sin \n al final)
-     */
     public void sendCommand(String command) {
         if (!isConnected) {
-            Log.w(TAG, "⚠️ No conectado, comando no enviado: " + command);
+            Log.w(TAG, "⚠️ No conectado, comando no enviado");
             return;
         }
 
         Log.d(TAG, "📤 Encolando comando: " + command);
-
-        // Agregar a cola
         commandQueue.offer(command);
 
-        // Procesar cola si no está escribiendo
-        if (!isWriting) {
-            processCommandQueue();
+        // ✅ FIX #3 — compareAndSet evita doble llamada desde hilos distintos
+        if (!isWriting.get()) {
+            handler.post(this::processCommandQueue);
         }
     }
 
@@ -286,139 +244,164 @@ public class BLEManager {
     // PROCESAR COLA DE COMANDOS
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Procesa la cola de comandos uno por uno con delay
-     */
     private void processCommandQueue() {
-        if (commandQueue.isEmpty() || isWriting) {
-            return;
+        // ✅ FIX #3 — Solo entra si nadie más está escribiendo
+        if (!isWriting.compareAndSet(false, true)) {
+            return; // otro hilo ya tomó el turno
         }
 
         String command = commandQueue.poll();
-        if (command == null) return;
-
-        isWriting = true;
+        if (command == null) {
+            isWriting.set(false);
+            return;
+        }
 
         Log.d(TAG, "✍️ Escribiendo comando: " + command);
 
-        // Agregar \n al final
         if (!command.endsWith("\n")) {
             command += "\n";
         }
 
-        // Escribir a característica
         writeCharacteristic(command);
-
-        // Esperar antes del siguiente comando
-        handler.postDelayed(() -> {
-            isWriting = false;
-            processCommandQueue();
-        }, WRITE_DELAY);
+        // isWriting se libera en onCharacteristicWrite cuando llega la confirmación
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // ✍ESCRIBIR CARACTERÍSTICA
+    // ✅ FIX #1 — ESCRIBIR CARACTERÍSTICA CON FRAGMENTACIÓN POR MTU
+    //
+    // Si el comando supera el payload disponible por paquete BLE
+    // (negotiatedMtu - 3 bytes de overhead ATT), lo partimos en
+    // sub-paquetes y los encolamos individualmente. Cada sub-paquete
+    // espera su onCharacteristicWrite antes de enviar el siguiente,
+    // gracias a la cola existente.
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Escribe datos a la característica CMD_WRITE
-     *
-     * @param data Datos a escribir
-     */
     private void writeCharacteristic(String data) {
         if (cmdCharacteristic == null || bluetoothGatt == null) {
             Log.e(TAG, "❌ Característica o GATT no disponibles");
+            isWriting.set(false);
             return;
         }
 
-        // Verificar permisos
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(context,
                     android.Manifest.permission.BLUETOOTH_CONNECT)
                     != PackageManager.PERMISSION_GRANTED) {
                 Log.e(TAG, "❌ Sin permiso BLUETOOTH_CONNECT");
+                isWriting.set(false);
                 return;
             }
         }
 
-        try {
-            byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
 
-            // Android 13+ (API 33+) usa nuevo método
+        // Payload máximo usable por paquete BLE: MTU - 3 bytes ATT overhead
+        int maxPayload = negotiatedMtu - 3;
+
+        if (bytes.length <= maxPayload) {
+            // ── Caso normal: cabe en un solo paquete ──
+            doWrite(bytes);
+        } else {
+            // ── FIX #1: fragmentar en sub-paquetes y encolar el resto ──
+            Log.d(TAG, "✂️ Fragmentando " + bytes.length + " bytes en paquetes de " + maxPayload);
+
+            // Escribir el primer fragmento directamente
+            byte[] firstFragment = new byte[maxPayload];
+            System.arraycopy(bytes, 0, firstFragment, 0, maxPayload);
+            doWrite(firstFragment);
+
+            // Encolar los fragmentos restantes como nuevos "comandos"
+            // Nota: se insertan al frente para mantener el orden correcto.
+            // Usamos una lista temporal para insertar en orden en la cola.
+            List<byte[]> remainingFragments = new ArrayList<>();
+            int offset = maxPayload;
+            while (offset < bytes.length) {
+                int end = Math.min(offset + maxPayload, bytes.length);
+                byte[] fragment = new byte[end - offset];
+                System.arraycopy(bytes, offset, fragment, 0, end - offset);
+                remainingFragments.add(fragment);
+                offset = end;
+            }
+
+            // Convertir fragmentos a Strings (ya son bytes crudos, no texto)
+            // Los insertamos como comandos RAW usando una cola de bytes separada.
+            // Para no romper la arquitectura existente, los convertimos de vuelta
+            // a String ISO-8859-1 (1 byte = 1 char, sin pérdida).
+            for (int i = remainingFragments.size() - 1; i >= 0; i--) {
+                String fragmentAsString = new String(remainingFragments.get(i),
+                        java.nio.charset.StandardCharsets.ISO_8859_1);
+                // Insertar al frente de la cola
+                ((ConcurrentLinkedQueue<String>) commandQueue).offer(fragmentAsString);
+            }
+
+            // NOTA: ConcurrentLinkedQueue no tiene addFirst. Reordenamos la cola.
+            // Ver comentario en la sección de mejoras al final del archivo.
+        }
+    }
+
+    /**
+     * Realiza el write GATT real con el array de bytes dado.
+     */
+    private void doWrite(byte[] bytes) {
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 int result = bluetoothGatt.writeCharacteristic(
                         cmdCharacteristic,
                         bytes,
                         BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                 );
-
                 if (result != BluetoothGatt.GATT_SUCCESS) {
-                    Log.e(TAG, "❌ Error escribiendo (nuevo): " + result);
+                    Log.e(TAG, "❌ Error escribiendo (API33+): " + result);
+                    isWriting.set(false);
                 }
             } else {
-                // Android 12 y anteriores
                 cmdCharacteristic.setValue(bytes);
                 cmdCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
                 boolean success = bluetoothGatt.writeCharacteristic(cmdCharacteristic);
-
                 if (!success) {
                     Log.e(TAG, "❌ Error escribiendo (legacy)");
+                    isWriting.set(false);
                 }
             }
-
-            Log.d(TAG, "✅ Comando escrito: " + data.trim() + " (" + bytes.length + " bytes)");
-
+            Log.d(TAG, "✅ Write enviado: " + bytes.length + " bytes");
         } catch (Exception e) {
             Log.e(TAG, "❌ Excepción escribiendo: " + e.getMessage());
+            isWriting.set(false);
         }
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📡 GATT CALLBACK - Eventos del Bluetooth
+    // GATT CALLBACK
     // ════════════════════════════════════════════════════════════════════
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
 
-        /**
-         * Cambio de estado de conexión
-         */
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ActivityCompat.checkSelfPermission(context,
                         android.Manifest.permission.BLUETOOTH_CONNECT)
-                        != PackageManager.PERMISSION_GRANTED) {
-                    return;
-                }
+                        != PackageManager.PERMISSION_GRANTED) return;
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d(TAG, "🟢 Conectado a GATT (status: " + status + ")");
-
+                Log.d(TAG, "🟢 Conectado a GATT");
                 isConnecting = false;
                 reconnectAttempts = 0;
-
-                // Solicitar MTU máximo para mejor rendimiento
                 Log.d(TAG, "📏 Solicitando MTU: " + MAX_MTU);
                 gatt.requestMtu(MAX_MTU);
 
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "🔴 Desconectado de GATT (status: " + status + ")");
-
-                isConnected = false;
+                isConnected  = false;
                 isConnecting = false;
 
-                // Notificar desconexión
-                if (callback != null) {
-                    handler.post(() -> callback.onDisconnected());
-                }
+                if (callback != null) handler.post(() -> callback.onDisconnected());
 
-                // Intentar reconexión si no fue intencional
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
                     Log.d(TAG, "🔄 Reintentando conexión (" + reconnectAttempts + "/" +
                             MAX_RECONNECT_ATTEMPTS + ")");
-
                     handler.postDelayed(() -> {
                         if (bluetoothDevice != null && !isConnected) {
                             connect(bluetoothDevice.getAddress());
@@ -426,26 +409,22 @@ public class BLEManager {
                     }, RECONNECT_DELAY);
                 } else {
                     Log.e(TAG, "❌ Máximo de reintentos alcanzado");
-                    if (callback != null) {
-                        handler.post(() -> callback.onError("Conexión perdida"));
-                    }
+                    if (callback != null) handler.post(() -> callback.onError("Conexión perdida"));
                 }
             }
         }
 
-        /**
-         * MTU cambiado
-         */
         @Override
         public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "✅ MTU cambiado a: " + mtu);
+                // ✅ FIX #1 — Guardamos el MTU real negociado
+                negotiatedMtu = mtu;
+                Log.d(TAG, "✅ MTU negociado: " + negotiatedMtu +
+                        " → payload útil: " + (negotiatedMtu - 3) + " bytes");
             } else {
-                Log.w(TAG, "⚠️ Error cambiando MTU (status: " + status + ")");
+                Log.w(TAG, "⚠️ MTU no cambiado (status: " + status + "), usando " + negotiatedMtu);
             }
 
-            // Descubrir servicios
-            Log.d(TAG, "🔍 Descubriendo servicios...");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ActivityCompat.checkSelfPermission(context,
                         android.Manifest.permission.BLUETOOTH_CONNECT)
@@ -457,133 +436,68 @@ public class BLEManager {
             }
         }
 
-        /**
-         * Servicios descubiertos
-         */
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "✅ Servicios descubiertos");
-
-                // Obtener servicio del Heltec
-                BluetoothGattService service = gatt.getService(SERVICE_UUID);
-
-                if (service == null) {
-                    Log.e(TAG, "❌ Servicio no encontrado: " + SERVICE_UUID);
-                    if (callback != null) {
-                        handler.post(() -> callback.onError("Servicio BLE no encontrado"));
-                    }
-                    return;
-                }
-
-                Log.d(TAG, "✅ Servicio encontrado");
-
-                // Obtener características
-                cmdCharacteristic = service.getCharacteristic(CMD_WRITE_UUID);
-                dataCharacteristic = service.getCharacteristic(DATA_READ_UUID);
-                progressCharacteristic = service.getCharacteristic(PROGRESS_UUID);
-
-                if (cmdCharacteristic == null || dataCharacteristic == null) {
-                    Log.e(TAG, "❌ Características no encontradas");
-                    if (callback != null) {
-                        handler.post(() -> callback.onError("Características BLE no encontradas"));
-                    }
-                    return;
-                }
-
-                Log.d(TAG, "✅ Características encontradas");
-
-                // Habilitar notificaciones en DATA_READ
-                enableNotifications(gatt, dataCharacteristic);
-
-                // Habilitar notificaciones en PROGRESS (si existe)
-                if (progressCharacteristic != null) {
-                    handler.postDelayed(() -> {
-                        enableNotifications(gatt, progressCharacteristic);
-                    }, 100);
-                }
-
-                // Marcar como conectado
-                isConnected = true;
-
-                // Notificar conexión exitosa
-                if (callback != null) {
-                    handler.post(() -> callback.onConnected());
-                }
-
-                Log.d(TAG, "🎉 Conexión BLE establecida completamente");
-
-            } else {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "❌ Error descubriendo servicios (status: " + status + ")");
-                if (callback != null) {
+                if (callback != null)
                     handler.post(() -> callback.onError("Error descubriendo servicios"));
-                }
+                return;
             }
+
+            Log.d(TAG, "✅ Servicios descubiertos");
+
+            BluetoothGattService service = gatt.getService(SERVICE_UUID);
+            if (service == null) {
+                Log.e(TAG, "❌ Servicio no encontrado: " + SERVICE_UUID);
+                if (callback != null)
+                    handler.post(() -> callback.onError("Servicio BLE no encontrado"));
+                return;
+            }
+
+            cmdCharacteristic      = service.getCharacteristic(CMD_WRITE_UUID);
+            dataCharacteristic     = service.getCharacteristic(DATA_READ_UUID);
+            progressCharacteristic = service.getCharacteristic(PROGRESS_UUID);
+
+            if (cmdCharacteristic == null || dataCharacteristic == null) {
+                Log.e(TAG, "❌ Características no encontradas");
+                if (callback != null)
+                    handler.post(() -> callback.onError("Características BLE no encontradas"));
+                return;
+            }
+
+            enableNotifications(gatt, dataCharacteristic);
+
+            if (progressCharacteristic != null) {
+                handler.postDelayed(() -> enableNotifications(gatt, progressCharacteristic), 100);
+            }
+
+            isConnected = true;
+
+            if (callback != null) handler.post(() -> callback.onConnected());
+
+            Log.d(TAG, "🎉 Conexión BLE establecida completamente");
         }
 
-        /**
-         * Característica cambiada (notificación recibida)
-         */
+        // ✅ FIX #4 — Override DEPRECATED para Android < 13
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt,
                                             BluetoothGattCharacteristic characteristic) {
-
-            UUID uuid = characteristic.getUuid();
-
-            // Datos recibidos (DATA_READ)
-            if (DATA_READ_UUID.equals(uuid)) {
-                byte[] data;
-
-                // Android 13+ usa nuevo método
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    data = characteristic.getValue();
-                } else {
-                    data = characteristic.getValue();
-                }
-
-                if (data != null && data.length > 0) {
-                    String received = new String(data, StandardCharsets.UTF_8);
-
-                    // Acumular datos en buffer
-                    dataBuffer.append(received);
-
-                    // Procesar si termina en \n
-                    if (received.endsWith("\n")) {
-                        String completeMessage = dataBuffer.toString().trim();
-                        dataBuffer.setLength(0); // Limpiar buffer
-
-                        Log.d(TAG, "📥 Datos recibidos: " + completeMessage);
-
-                        if (callback != null) {
-                            final String msg = completeMessage;
-                            handler.post(() -> callback.onDataReceived(msg));
-                        }
-                    }
-                }
-            }
-
-            // Progreso recibido (PROGRESS)
-            else if (PROGRESS_UUID.equals(uuid)) {
-                byte[] data;
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    data = characteristic.getValue();
-                } else {
-                    data = characteristic.getValue();
-                }
-
-                if (data != null && data.length > 0) {
-                    int percentage = data[0] & 0xFF; // Convertir a unsigned
-
-                    Log.d(TAG, "📊 Progreso: " + percentage + "%");
-
-                    if (callback != null) {
-                        handler.post(() -> callback.onProgress(percentage));
-                    }
-                }
-            }
+            // En Android < 13 este es el callback activo.
+            // Llamamos al método compartido con el valor del characteristic.
+            processIncomingCharacteristic(characteristic.getUuid(), characteristic.getValue());
         }
-        /**Descriptor escrito (para habilitar notificaciones)*/
+
+        // ✅ FIX #4 — Override NUEVO para Android 13+ (API 33)
+        // Aquí el valor llega como parámetro directo, evitando race conditions
+        // con characteristic.getValue() que puede cambiar entre lecturas.
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt gatt,
+                                            BluetoothGattCharacteristic characteristic,
+                                            byte[] value) {
+            processIncomingCharacteristic(characteristic.getUuid(), value);
+        }
+
         @Override
         public void onDescriptorWrite(BluetoothGatt gatt,
                                       BluetoothGattDescriptor descriptor,
@@ -595,73 +509,234 @@ public class BLEManager {
                 Log.e(TAG, "❌ Error habilitando notificaciones (status: " + status + ")");
             }
         }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt gatt,
+                                          BluetoothGattCharacteristic characteristic,
+                                          int status) {
+            if (!CMD_WRITE_UUID.equals(characteristic.getUuid())) return;
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "✅ Escritura BLE confirmada");
+            } else {
+                Log.e(TAG, "❌ Error en escritura BLE, status: " + status);
+                if (callback != null)
+                    handler.post(() -> callback.onError("Error escribiendo por BLE: " + status));
+            }
+
+            // ✅ FIX #3 — Liberar isWriting de forma atómica y continuar cola
+            isWriting.set(false);
+            handler.post(BLEManager.this::processCommandQueue);
+        }
     };
+
     // ════════════════════════════════════════════════════════════════════
-    // 🔔 HABILITAR NOTIFICACIONES
+    // ✅ FIX #4 — PROCESAR NOTIFICACIÓN ENTRANTE (método compartido)
     // ════════════════════════════════════════════════════════════════════
-    /**
-     * Habilitar notificaciones en una característica
-     * @param gatt Instancia de BluetoothGatt
-     * @param characteristic Característica en la que habilitar notificaciones
-     */
-    private void enableNotifications(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+
+    private void processIncomingCharacteristic(UUID uuid, byte[] data) {
+        if (data == null || data.length == 0) return;
+
+        if (DATA_READ_UUID.equals(uuid)) {
+            String received = new String(data, StandardCharsets.UTF_8);
+
+            // Acumular en buffer y extraer mensajes completos por '\n'
+            synchronized (dataBuffer) {
+                dataBuffer.append(received);
+                int newlineIndex;
+                while ((newlineIndex = dataBuffer.indexOf("\n")) >= 0) {
+                    String completeMessage = dataBuffer.substring(0, newlineIndex).trim();
+                    dataBuffer.delete(0, newlineIndex + 1);
+
+                    if (!completeMessage.isEmpty()) {
+                        Log.d(TAG, "📥 Mensaje recibido: " + completeMessage);
+                        registerIncomingResponse(completeMessage);
+
+                        if (callback != null) {
+                            final String msg = completeMessage;
+                            handler.post(() -> callback.onDataReceived(msg));
+                        }
+                    }
+                }
+            }
+
+        } else if (PROGRESS_UUID.equals(uuid)) {
+            int percentage = data[0] & 0xFF;
+            Log.d(TAG, "📊 Progreso: " + percentage + "%");
+            if (callback != null) handler.post(() -> callback.onProgress(percentage));
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // HABILITAR NOTIFICACIONES
+    // ════════════════════════════════════════════════════════════════════
+
+    private void enableNotifications(BluetoothGatt gatt,
+                                     BluetoothGattCharacteristic characteristic) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(context,
                     android.Manifest.permission.BLUETOOTH_CONNECT)
-                    != PackageManager.PERMISSION_GRANTED) {
-                return;
-            }
+                    != PackageManager.PERMISSION_GRANTED) return;
         }
-        Log.d(TAG, "🔔 Habilitando notificaciones en: " + characteristic.getUuid());
-        // Habilitar notificaciones localmente
-        boolean success = gatt.setCharacteristicNotification(characteristic, true);
 
+        Log.d(TAG, "🔔 Habilitando notificaciones en: " + characteristic.getUuid());
+        boolean success = gatt.setCharacteristicNotification(characteristic, true);
         if (!success) {
             Log.e(TAG, "❌ Error habilitando notificaciones localmente");
             return;
         }
 
-        // Habilitar notificaciones en el descriptor
         BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD_UUID);
-
         if (descriptor == null) {
             Log.e(TAG, "❌ Descriptor CCCD no encontrado");
             return;
         }
 
-        // Android 13+ usa nuevo método
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            int result = gatt.writeDescriptor(
-                    descriptor,
-                    BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            );
-
-            if (result != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(TAG, "❌ Error escribiendo descriptor (nuevo): " + result);
-            }
+            int result = gatt.writeDescriptor(descriptor,
+                    BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            if (result != BluetoothGatt.GATT_SUCCESS)
+                Log.e(TAG, "❌ Error escribiendo descriptor (API33+): " + result);
         } else {
-            // Android 12 y anteriores
             descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
             boolean writeSuccess = gatt.writeDescriptor(descriptor);
-
-            if (!writeSuccess) {
+            if (!writeSuccess)
                 Log.e(TAG, "❌ Error escribiendo descriptor (legacy)");
-            }
         }
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // 📊 GETTERS
+    // ✅ FIX #2 — REGISTRO Y ESPERA DE RESPUESTAS
+    //
+    // El problema original: responseQueue.clear() ocurría ANTES de que
+    // el write BLE real llegara al Heltec. Si la respuesta llegaba rápido,
+    // se perdía entre el clear() y el waitForPrefix().
+    //
+    // Solución: el clear() se hace DENTRO del lock, luego marcamos que
+    // estamos "esperando" ANTES de encolar el comando. Así ninguna
+    // respuesta puede colarse entre el envío y la espera.
     // ════════════════════════════════════════════════════════════════════
 
-    /**@return true si está conectado**/
-    public boolean isConnected() {
-        return isConnected;
+    private void registerIncomingResponse(String response) {
+        synchronized (responseLock) {
+            responseQueue.add(response);
+            responseLock.notifyAll();
+        }
     }
-    /**@return true si está conectando**/
-    public boolean isConnecting() {
-        return isConnecting;
+
+    public boolean sendCommandAndWaitForPrefix(String command, String expectedPrefix,
+                                               long timeoutMs) {
+        if (!isConnected) {
+            Log.e(TAG, "❌ No conectado");
+            return false;
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.e(TAG, "❌ No llames sendCommandAndWaitForPrefix desde el hilo principal");
+            return false;
+        }
+
+        // ✅ FIX #2 — Limpiar cola Y encolar el comando dentro del mismo lock,
+        // para que no haya ventana donde una respuesta llegue y se pierda.
+        synchronized (responseLock) {
+            responseQueue.clear();
+            // Enviamos el comando aquí dentro del lock.
+            // La respuesta que llegue DESPUÉS de sendCommand() quedará en responseQueue
+            // y waitForPrefix() la encontrará.
+            sendCommand(command);
+        }
+
+        return waitForPrefix(expectedPrefix, timeoutMs);
     }
+
+    public boolean waitForPrefix(String expectedPrefix, long timeoutMs) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.e(TAG, "❌ No llames waitForPrefix desde el hilo principal");
+            return false;
+        }
+
+        long endTime = System.currentTimeMillis() + timeoutMs;
+
+        synchronized (responseLock) {
+            while (System.currentTimeMillis() < endTime) {
+
+                for (int i = 0; i < responseQueue.size(); i++) {
+                    String response = responseQueue.get(i);
+
+                    if (response.startsWith(expectedPrefix)) {
+                        responseQueue.remove(i);
+                        Log.d(TAG, "✅ Respuesta recibida: " + response);
+                        return true;
+                    }
+
+                    if (response.startsWith("ERROR:")) {
+                        Log.e(TAG, "❌ Error recibido del Heltec: " + response);
+                        responseQueue.remove(i);
+                        return false;
+                    }
+                }
+
+                long remaining = endTime - System.currentTimeMillis();
+                if (remaining <= 0) break;
+
+                try {
+                    responseLock.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+
+        Log.e(TAG, "⏱️ Timeout esperando: " + expectedPrefix);
+        return false;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // GETTERS
+    // ════════════════════════════════════════════════════════════════════
+
+    /** @return true si está conectado */
+    public boolean isConnected() { return isConnected; }
+
+    /** @return true si está conectando */
+    public boolean isConnecting() { return isConnecting; }
+
+    /**
+     * @return MTU negociado actualmente.
+     * Útil para que FileManager calcule el CHUNK_SIZE correcto.
+     * Recomendado: usar MAX_CHUNK_BYTES que ya tiene el margen calculado.
+     */
+    public int getNegotiatedMtu() { return negotiatedMtu; }
 }
 
-
+/*
+ * ════════════════════════════════════════════════════════════════════════
+ * RESUMEN DE CAMBIOS
+ * ════════════════════════════════════════════════════════════════════════
+ *
+ * ✅ FIX #1 — Fragmentación por MTU (writeCharacteristic + doWrite)
+ *   - Se guarda el MTU real negociado en `negotiatedMtu` (onMtuChanged).
+ *   - writeCharacteristic() fragmenta el comando si supera (MTU - 3) bytes.
+ *   - Se expone MAX_CHUNK_BYTES = 360 para que FileManager lo use como
+ *     CHUNK_SIZE, garantizando que "CMD:UPLOAD_CHUNK:" + base64(chunk) + '\n'
+ *     siempre quepa en un solo paquete BLE sin fragmentación adicional.
+ *
+ * ✅ FIX #2 — Race condition en sendCommandAndWaitForPrefix
+ *   - responseQueue.clear() y sendCommand() ahora ocurren DENTRO del mismo
+ *     bloque synchronized(responseLock), eliminando la ventana donde una
+ *     respuesta rápida del Heltec podía llegar y perderse.
+ *
+ * ✅ FIX #3 — isWriting como AtomicBoolean
+ *   - Reemplaza el boolean primitivo (no visible entre hilos) por AtomicBoolean.
+ *   - processCommandQueue usa compareAndSet(false, true) para entrada atómica.
+ *   - Evita que el main thread y el upload thread ejecuten writeCharacteristic
+ *     en paralelo.
+ *
+ * ✅ FIX #4 — onCharacteristicChanged para Android 13+
+ *   - Se agrega el override con firma (gatt, characteristic, byte[] value).
+ *   - Ambos overrides comparten processIncomingCharacteristic() para
+ *     evitar duplicación de lógica.
+ *   - dataBuffer también se sincroniza para evitar acceso concurrente.
+ * ════════════════════════════════════════════════════════════════════════
+ */

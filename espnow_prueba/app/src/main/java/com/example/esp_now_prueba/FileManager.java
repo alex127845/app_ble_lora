@@ -28,7 +28,7 @@ public class FileManager {
     // ════════════════════════════════════════════════════════════════════
 
     // Tamaño de chunk en bytes (debe coincidir con el firmware)
-    private static final int CHUNK_SIZE = 200;
+    private static final int CHUNK_SIZE = BLEManager.MAX_CHUNK_BYTES;
 
     // Timeout para esperar ACK (ms)
     private static final int ACK_TIMEOUT = 2000;
@@ -117,81 +117,103 @@ public class FileManager {
      * @param bleManager Manager BLE para enviar chunks
      * @param callback Callback para notificar progreso
      */
+
     public void uploadFileInChunks(InputStream inputStream,
+                                   String fileName,
                                    long fileSize,
                                    BLEManager bleManager,
                                    UploadCallback callback) {
 
-        Log.d(TAG, "📤 Iniciando upload en chunks");
+        Log.d(TAG, "📤 Iniciando upload");
+        Log.d(TAG, "   Archivo: " + fileName);
         Log.d(TAG, "   Tamaño: " + fileSize + " bytes");
 
-        // Calcular número de chunks
+        if (fileSize <= 0) {
+            if (callback != null) {
+                callback.onError("Tamaño de archivo inválido: " + fileSize + " bytes");
+            }
+            return;
+        }
+
         int totalChunks = (int) Math.ceil((double) fileSize / CHUNK_SIZE);
         Log.d(TAG, "   Chunks totales: " + totalChunks);
 
         try {
+            String startCommand = "CMD:UPLOAD_START:" + fileName + ":" + fileSize;
+
+            boolean ready = bleManager.sendCommandAndWaitForPrefix(
+                    startCommand,
+                    "OK:UPLOAD_READY",
+                    ACK_TIMEOUT
+            );
+
+            if (!ready) {
+                if (callback != null) {
+                    callback.onError("El Heltec no confirmó OK:UPLOAD_READY");
+                }
+                return;
+            }
+
             byte[] buffer = new byte[CHUNK_SIZE];
             int chunkNumber = 0;
             int bytesRead;
             long totalBytesRead = 0;
 
-            // Leer y enviar chunks
             while ((bytesRead = inputStream.read(buffer)) > 0) {
-
-                // Crear chunk del tamaño exacto leído
                 byte[] chunk = new byte[bytesRead];
                 System.arraycopy(buffer, 0, chunk, 0, bytesRead);
 
-                // Codificar a Base64
                 String base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP);
-
-                // Crear comando
                 String command = "CMD:UPLOAD_CHUNK:" + base64Chunk;
 
-                // Enviar comando
-                bleManager.sendCommand(command);
+                int expectedAck = chunkNumber + 1;
+
+                boolean ackOk = bleManager.sendCommandAndWaitForPrefix(
+                        command,
+                        "ACK:" + expectedAck,
+                        ACK_TIMEOUT
+                );
+
+                if (!ackOk) {
+                    if (callback != null) {
+                        callback.onError("No llegó ACK del chunk " + expectedAck);
+                    }
+                    return;
+                }
 
                 chunkNumber++;
                 totalBytesRead += bytesRead;
 
-                // Calcular progreso
                 int percentage = (int) ((totalBytesRead * 100) / fileSize);
 
-                // Notificar progreso cada 10% o en el último chunk
-                if (percentage % 10 == 0 || chunkNumber >= totalChunks) {
-                    Log.d(TAG, "📦 Chunk " + chunkNumber + "/" + totalChunks +
-                            " (" + percentage + "%) - " + bytesRead + " bytes");
+                Log.d(TAG, "📦 Chunk " + chunkNumber + "/" + totalChunks +
+                        " ACK OK (" + percentage + "%)");
 
-                    if (callback != null) {
-                        callback.onProgress(percentage);
-                    }
+                if (callback != null) {
+                    callback.onProgress(percentage);
                 }
-
-                // Pequeña pausa entre chunks para no saturar
-                Thread.sleep(100);
             }
 
-            Log.d(TAG, "✅ Upload completado: " + chunkNumber + " chunks enviados");
+            boolean uploadComplete = bleManager.waitForPrefix(
+                    "OK:UPLOAD_COMPLETE",
+                    ACK_TIMEOUT
+            );
 
-            // Esperar confirmación final del Heltec
-            Thread.sleep(500);
+            if (!uploadComplete) {
+                if (callback != null) {
+                    callback.onError("El Heltec no confirmó OK:UPLOAD_COMPLETE");
+                }
+                return;
+            }
+
+            Log.d(TAG, "✅ Upload confirmado por Heltec: " + totalBytesRead + " bytes");
 
             if (callback != null) {
                 callback.onComplete();
             }
 
-        } catch (IOException e) {
-            Log.e(TAG, "❌ Error leyendo archivo: " + e.getMessage());
-            if (callback != null) {
-                callback.onError("Error leyendo archivo: " + e.getMessage());
-            }
-        } catch (InterruptedException e) {
-            Log.e(TAG, "❌ Upload interrumpido: " + e.getMessage());
-            if (callback != null) {
-                callback.onError("Upload interrumpido");
-            }
         } catch (Exception e) {
-            Log.e(TAG, "❌ Error en upload: " + e.getMessage());
+            Log.e(TAG, "❌ Error: " + e.getMessage());
             if (callback != null) {
                 callback.onError("Error: " + e.getMessage());
             }
@@ -389,8 +411,8 @@ public class FileManager {
     public long getFileSize(Uri uri) {
         long size = 0;
 
+        // OPCIÓN 1: ContentProvider (CONFIABLE)
         if (uri.getScheme() != null && uri.getScheme().equals("content")) {
-            // URI de content provider
             try (Cursor cursor = context.getContentResolver().query(
                     uri, null, null, null, null)) {
 
@@ -398,28 +420,37 @@ public class FileManager {
                     int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
                     if (sizeIndex >= 0) {
                         size = cursor.getLong(sizeIndex);
+                        if (size > 0) {
+                            Log.d(TAG, "✅ Tamaño obtenido: " + size + " bytes");
+                            return size;
+                        }
                     }
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Error obteniendo tamaño: " + e.getMessage());
+                Log.e(TAG, "⚠️ Error: " + e.getMessage());
             }
         }
 
-        // Si no se pudo obtener, intentar con inputStream
-        if (size == 0) {
-            try {
-                InputStream inputStream = context.getContentResolver().openInputStream(uri);
-                if (inputStream != null) {
-                    size = inputStream.available();
-                    inputStream.close();
+        // OPCIÓN 2: InputStream (FALLBACK)
+        try {
+            InputStream inputStream = context.getContentResolver().openInputStream(uri);
+            if (inputStream != null) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    size += bytesRead;
                 }
-            } catch (IOException e) {
-                Log.e(TAG, "Error calculando tamaño: " + e.getMessage());
+                inputStream.close();
+
+                Log.d(TAG, "✅ Tamaño calculado: " + size + " bytes");
+                return size;
             }
+        } catch (IOException e) {
+            Log.e(TAG, "❌ Error leyendo tamaño: " + e.getMessage());
         }
 
-        Log.d(TAG, "📊 Tamaño de archivo: " + size + " bytes");
-        return size;
+        Log.w(TAG, "⚠️ Tamaño no disponible, usando 0");
+        return 0;
     }
 
     /**

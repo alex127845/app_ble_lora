@@ -403,15 +403,9 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
         showProgress(true, "Subiendo " + fileName + "...", 0);
 
         // Enviar comando UPLOAD_START
-        String command = "CMD:UPLOAD_START:" + fileName + ":" + fileSize;
-        bleManager.sendCommand(command);
-
         // Preparar archivo para envío en chunks
         new Thread(() -> {
             try {
-                // Esperar confirmación del Heltec
-                Thread.sleep(500);
-
                 // Leer archivo
                 InputStream inputStream = getContentResolver().openInputStream(fileUri);
                 if (inputStream == null) {
@@ -423,10 +417,7 @@ public class DeviceActivity extends AppCompatActivity implements BLEManager.BLEC
                 }
 
                 // Dividir en chunks y enviar
-                fileManager.uploadFileInChunks(
-                        inputStream,
-                        fileSize,
-                        bleManager,
+                fileManager.uploadFileInChunks(inputStream, fileName, fileSize, bleManager,
                         new FileManager.UploadCallback() {
                             @Override
                             public void onProgress(int percentage) {

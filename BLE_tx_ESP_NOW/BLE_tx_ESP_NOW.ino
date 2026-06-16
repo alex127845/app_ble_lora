@@ -36,7 +36,7 @@
 // 🔧 CONFIGURACIÓN - PROTOCOLO BROADCAST
 // ════════════════════════════════════════════════════════════════
 
-#define CHUNK_SIZE_BLE    200
+#define CHUNK_SIZE_BLE    360
 #define CHUNK_SIZE_ESPNOW 240  // ESP-NOW MTU optimizado
 #define MAX_FILENAME_LENGTH 64
 #define MAX_RETRIES       3
@@ -110,6 +110,7 @@ enum TransferState {
 TransferState currentState   = STATE_IDLE;
 String        currentFilename = "";
 File          currentFile;
+String bleReceiveBuffer = "";
 uint32_t      expectedFileSize = 0;
 uint32_t      transferredBytes = 0;
 uint16_t      expectedChunks   = 0;
@@ -190,11 +191,13 @@ void onESPNowSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
+    bleReceiveBuffer = ""; // ← limpiar buffer al conectar
     Serial.println("\n✅ Cliente BLE conectado");
   }
 
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
+    bleReceiveBuffer = ""; // ← limpiar buffer al desconectar
     Serial.println("\n❌ Cliente BLE desconectado");
 
     if (currentState != STATE_IDLE) {
@@ -216,14 +219,23 @@ class CmdCallbacks : public BLECharacteristicCallbacks {
     uint8_t* pData = pCharacteristic->getData();
     size_t   len   = pCharacteristic->getValue().length();
 
-    if (len > 0 && pData != nullptr) {
-      String command = "";
-      for (size_t i = 0; i < len; i++) command += (char)pData[i];
-      command.trim();
+    if (len == 0 || pData == nullptr) return;
 
-      if (command.length() > 0) {
-        Serial.println("\n📩 Comando BLE recibido: " + command);
-        handleCommand(command);
+    // ✅ Acumular fragmentos BLE en el buffer global
+    for (size_t i = 0; i < len; i++) {
+      bleReceiveBuffer += (char)pData[i];
+    }
+
+    // ✅ Procesar solo comandos completos (delimitados por '\n')
+    int newlineIdx;
+    while ((newlineIdx = bleReceiveBuffer.indexOf('\n')) >= 0) {
+      String completeCommand = bleReceiveBuffer.substring(0, newlineIdx);
+      bleReceiveBuffer = bleReceiveBuffer.substring(newlineIdx + 1);
+      completeCommand.trim();
+
+      if (completeCommand.length() > 0) {
+        Serial.println("\n📩 Comando BLE recibido: " + completeCommand);
+        handleCommand(completeCommand);
       }
     }
   }
@@ -664,8 +676,8 @@ void startUpload(String filename, uint32_t fileSize) {
 void receiveChunk(String base64Data) {
   if (currentState != STATE_UPLOADING) { sendResponse("ERROR:NOT_UPLOADING"); return; }
 
-  uint8_t buffer[CHUNK_SIZE_BLE + 10];
-  size_t  decodedLen = decodeBase64(base64Data, buffer, sizeof(buffer));
+  uint8_t buffer[512]; // margen seguro
+  size_t decodedLen = decodeBase64(base64Data, buffer, sizeof(buffer));
 
   if (decodedLen == 0) { sendResponse("ERROR:DECODE_FAILED"); return; }
 
@@ -681,17 +693,39 @@ void receiveChunk(String base64Data) {
   transferredBytes += written;
   receivedChunks++;
 
-  uint8_t progress = (transferredBytes * 100) / expectedFileSize;
-  if (receivedChunks % 10 == 0 || receivedChunks >= expectedChunks) sendProgress(progress);
+  uint8_t progress = (uint8_t)((transferredBytes * 100UL) / expectedFileSize);
+  if (receivedChunks % 10 == 0) sendProgress(progress);
 
+  // Enviar ACK primero, siempre
   sendResponse("ACK:" + String(receivedChunks));
 
-  if (receivedChunks >= expectedChunks || transferredBytes >= expectedFileSize) {
+  // Verificar fin SOLO por conteo de chunks (más confiable)
+  if (receivedChunks >= expectedChunks) {
     currentFile.flush();
     currentFile.close();
-    Serial.printf("✅ Upload BLE completo: %s\n", currentFilename.c_str());
-    sendResponse("OK:UPLOAD_COMPLETE:" + String(transferredBytes));
+
+    // Verificar tamaño real vs esperado
+    File verify = LittleFS.open(currentFilename, "r");
+    size_t actualSize = verify ? verify.size() : 0;
+    if (verify) verify.close();
+
+    if (actualSize != expectedFileSize) {
+      Serial.printf("⚠️ Tamaño incorrecto: esperado %u, recibido %u\n",
+                    expectedFileSize, actualSize);
+      LittleFS.remove(currentFilename);
+      resetTransferState();
+      sendResponse("ERROR:SIZE_MISMATCH");
+      return;
+    }
+
+    Serial.printf("✅ Upload completo: %s (%u bytes)\n",
+                  currentFilename.c_str(), transferredBytes);
     sendProgress(100);
+
+    // UPLOAD_COMPLETE va DESPUÉS del ACK del último chunk
+    // Android lo espera en waitForPrefix tras el loop
+    sendResponse("OK:UPLOAD_COMPLETE:" + String(transferredBytes));
+
     resetTransferState();
   }
 }
